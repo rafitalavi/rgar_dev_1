@@ -11,25 +11,65 @@ from .serializers import SubjectMattersSerializer
 from permissions_app.services import has_permission
 
 from django.shortcuts import get_object_or_404
+# class CreateSubjectView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def post(self, request):
+#         if not has_permission(request.user, "subject:create"):
+#             return Response({"detail": "Forbidden"}, status=403)
+
+#         serializer = SubjectMattersSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+
+#         try:
+#             serializer.save()
+#         except IntegrityError:
+#             return Response(
+#                 {"message": ["Subject already exists."]},
+#                 status=400,
+#             )
+
+#         return Response(serializer.data, status=201)
+
+
+
 class CreateSubjectView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         if not has_permission(request.user, "subject:create"):
-            return Response({"detail": "Forbidden"}, status=403)
+            return Response(
+                {"message": ["Forbidden"]},
+                status=403
+            )
 
         serializer = SubjectMattersSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+
+        if not serializer.is_valid():
+            # 🔁 Convert field errors to message
+            messages = []
+            for field_errors in serializer.errors.values():
+                messages.extend(field_errors)
+
+            return Response(
+                {
+                    "message": messages
+                },
+                status=400
+            )
 
         try:
             serializer.save()
         except IntegrityError:
             return Response(
-                {"title": ["Subject already exists."]},
-                status=400,
+                {
+                    "message": ["Subject already exists."]
+                },
+                status=400
             )
 
         return Response(serializer.data, status=201)
+
 
 
 class ListSubjectView(APIView):
@@ -37,18 +77,44 @@ class ListSubjectView(APIView):
 
     def get(self, request):
         if not has_permission(request.user, "subject:view"):
-            return Response({"detail": "Forbidden"}, status=403)
+            return Response(
+                {
+                    "success": False,
+                    "message": "You do not have permission to view subjects",
+                    "errors": None,
+                    "data": None,
+                },
+                status=403,
+            )
 
         qs = SubjectMatters.objects.all()
         serializer = SubjectMattersSerializer(qs, many=True)
-        return Response(serializer.data, status=200)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Subjects fetched successfully",
+                "errors": None,
+                "data": serializer.data,
+            },
+            status=200,
+        )
+
 
 class SubjectDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         if not has_permission(request.user, "subject:view"):
-            return Response({"detail": "Forbidden"}, status=403)
+            return Response(
+                {
+                    "success": False,
+                    "message": "You do not have permission to view subjects",
+                    "errors": None,
+                    "data": None,
+                },
+                status=403,
+            )
 
         subject = get_object_or_404(SubjectMatters, pk=pk)
         serializer = SubjectMattersSerializer(subject)
@@ -72,28 +138,103 @@ class SubjectDetailView(APIView):
 #         clinic.save()
 #         return Response({"success": True})
 
+
+
+
+
+
+#ok
+# class UpdateSubjectView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def put(self, request, pk):
+#         if not has_permission(request.user, "subject:update"):
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "You do not have permission to Update subjects",
+#                     "errors": None,
+#                     "data": None,
+#                 },
+#                 status=403,
+#             )
+
+#         subject = get_object_or_404(SubjectMatters, pk=pk)
+
+#         serializer = SubjectMattersSerializer(subject, data=request.data)
+#         serializer.is_valid(raise_exception=True)
+
+#         try:
+#             serializer.save()
+#         except IntegrityError:
+#             return Response(
+#                 {"message": ["Subject name already exists."]},
+#                 status=400,
+#             )
+
+#         return Response(serializer.data, status=200)
+
+  
 class UpdateSubjectView(APIView):
     permission_classes = [IsAuthenticated]
 
     def put(self, request, pk):
+        # 🔐 Permission check
         if not has_permission(request.user, "subject:update"):
-            return Response({"detail": "Forbidden"}, status=403)
+            return Response(
+                {
+                    "success": False,
+                    "message": "You do not have permission to update subjects",
+                    "errors": None,
+                    "data": None,
+                },
+                status=403,
+            )
 
         subject = get_object_or_404(SubjectMatters, pk=pk)
 
         serializer = SubjectMattersSerializer(subject, data=request.data)
-        serializer.is_valid(raise_exception=True)
 
+        if not serializer.is_valid():
+            messages = []
+            for errs in serializer.errors.values():
+                messages.extend(errs)
+
+            return Response(
+                {
+                    "success": False,
+                    "message": messages[0],
+                    "errors": serializer.errors,
+                    "data": None,
+                },
+                status=400,
+            )
+
+        
         try:
             serializer.save()
         except IntegrityError:
             return Response(
-                {"title": ["Subject already exists."]},
+                {
+                    "success": False,
+                    "message": "Subject name already exists.",
+                    "errors": None,
+                    "data": None,
+                },
                 status=400,
             )
 
-        return Response(serializer.data, status=200)
-
+       
+        return Response(
+            {
+                "success": True,
+                "message": "Subject updated successfully",
+                "errors": None,
+                "data": serializer.data,
+            },
+            status=200,
+        )
+  
     
 class DeleteSubjectView(APIView):
     permission_classes = [IsAuthenticated]

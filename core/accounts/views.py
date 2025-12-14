@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer
 from permissions_app.services import has_permission
 from medical.models import ClinicUser
+from core.utils.pagination import StandardResultsSetPagination
 
 #login
 class LoginView(APIView):
@@ -87,8 +88,15 @@ class ListUserView(APIView):
             qs = qs.filter(is_active=(active == "true"))
         if clinic:
             qs = qs.filter(clinicuser__clinic_id=clinic)
+        qs = qs.distinct().order_by("id")
 
-        return Response(UserListSerializer(qs.distinct(), many=True).data)
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(qs, request)
+
+        serializer = UserListSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+        # return Response(UserListSerializer(qs.distinct(), many=True).data)
 
 
 
