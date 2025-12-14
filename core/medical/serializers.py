@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Clinic
 
 class ClinicSerializer(serializers.ModelSerializer):
+    active_members = serializers.IntegerField(read_only=True)
     class Meta:
         model = Clinic
         fields = (
@@ -12,6 +13,7 @@ class ClinicSerializer(serializers.ModelSerializer):
             "fax_number",
             "website",
             "type",
+            "active_members",
         )
 
     def validate_name(self, value):
@@ -26,3 +28,4 @@ class ClinicSerializer(serializers.ModelSerializer):
                 "A clinic with this name already exists."
             )
         return value
+    

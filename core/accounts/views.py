@@ -6,9 +6,12 @@ from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import User
-from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer
+from django.shortcuts import get_object_or_404
+from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer
 from permissions_app.services import has_permission
 from medical.models import ClinicUser
+
+#login
 class LoginView(APIView):
     authentication_classes = []
 
@@ -23,7 +26,11 @@ class LoginView(APIView):
                 {"detail": "Invalid credentials"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
-
+        if not user.is_active:
+                return Response(
+                {"detail": "Account is inactive"},
+                status=status.HTTP_403_FORBIDDEN
+            )
         refresh = RefreshToken.for_user(user)
 
         return Response({
@@ -36,6 +43,9 @@ class LoginView(APIView):
                 "profile_pic": user.picture.url if user.picture else None,
             }
         }, status=status.HTTP_200_OK)
+
+
+#creation        
 class CreateUserView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -47,6 +57,9 @@ class CreateUserView(APIView):
         s.is_valid(raise_exception=True)
         s.save()
         return Response({"success": True}, status=201)
+    
+    
+# list    
 class ListUserView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -76,7 +89,63 @@ class ListUserView(APIView):
             qs = qs.filter(clinicuser__clinic_id=clinic)
 
         return Response(UserListSerializer(qs.distinct(), many=True).data)
-    
+
+
+
+#details
+class UserDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        if not has_permission(request.user, "user:view"):
+            return Response(
+                {"detail": "Forbidden"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user = get_object_or_404(
+            User,
+            id=user_id,
+            is_deleted=False
+        )
+
+        # 🔒 Owner → can see everyone
+        if request.user.role == "owner":
+            pass
+
+        # 🏥 President / Manager → same clinic only
+        elif request.user.role in ["president", "manager"]:
+            my_clinics = ClinicUser.objects.filter(
+                user=request.user
+            ).values_list("clinic_id", flat=True)
+
+            target_clinics = ClinicUser.objects.filter(
+                user=user,
+                clinic_id__in=my_clinics
+            ).exists()
+
+            if not target_clinics:
+                return Response(
+                    {"detail": "Forbidden"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        # 👤 Other roles → self only
+        else:
+            if request.user.id != user.id:
+                return Response(
+                    {"detail": "Forbidden"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        return Response(
+            UserListSerializer(user).data,
+            status=status.HTTP_200_OK
+        )
+
+
+
+# update    
 class UpdateUserView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = (MultiPartParser, FormParser)
@@ -95,6 +164,25 @@ class UpdateUserView(APIView):
         s.save()
 
         return Response(s.data)
+#pass word    
+class PasswordResetView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = PasswordResetSerializer(
+            data=request.data,
+            context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {"detail": "Password updated successfully"},
+            status=status.HTTP_200_OK
+        )
+    
+    
+# delete    
 class DeleteUserView(APIView):
     permission_classes = [IsAuthenticated]
 

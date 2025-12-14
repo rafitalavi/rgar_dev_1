@@ -3,7 +3,7 @@ from rest_framework.validators import UniqueValidator
 from .models import User
 from medical.models import Clinic
 from medical.models import ClinicUser
-
+from django.contrib.auth.password_validation import validate_password
 from subject_matters.models import SubjectMatters
 
 
@@ -82,6 +82,8 @@ from subject_matters.models import SubjectMatters
 
 #         return user
 
+
+#creations
 class UserCreateSerializer(serializers.ModelSerializer):
     employee_id = serializers.CharField(
         required=False,
@@ -202,6 +204,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
+
+
+#user list
 class UserListSerializer(serializers.ModelSerializer):
     clinics = serializers.SerializerMethodField()
 
@@ -212,6 +217,11 @@ class UserListSerializer(serializers.ModelSerializer):
     def get_clinics(self, obj):
         return list(obj.clinicuser_set.values_list("clinic__name", flat=True))
 
+
+
+
+
+#user update
 class UserUpdateSerializer(serializers.ModelSerializer):
     clinic_ids = serializers.ListField(
         child=serializers.IntegerField(),
@@ -303,3 +313,34 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
         return instance
 
+
+
+
+#password
+class PasswordResetSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    password1 = serializers.CharField(write_only=True)
+    password2 = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        user = self.context["request"].user
+
+        if not user.check_password(attrs["old_password"]):
+            raise serializers.ValidationError({
+                "old_password": "Old password is incorrect"
+            })
+
+        if attrs["password1"] != attrs["password2"]:
+            raise serializers.ValidationError({
+                "password2": "Passwords do not match"
+            })
+
+        validate_password(attrs["password1"], user)
+
+        return attrs
+
+    def save(self):
+        user = self.context["request"].user
+        user.set_password(self.validated_data["password1"])
+        user.save()
+        return user

@@ -5,6 +5,7 @@ from rest_framework import status
 from django.db import IntegrityError
 from .models import Clinic, ClinicUser
 from .serializers import ClinicSerializer
+from django.db.models import Count, Q
 from permissions_app.services import has_permission
 from .services import delete_clinic_and_users
 from django.shortcuts import get_object_or_404
@@ -35,15 +36,27 @@ class ListClinicView(APIView):
 
     def get(self, request):
         if not has_permission(request.user, "clinic:view"):
-            return Response({"detail":"Forbidden"}, status=403)
+            return Response({"detail": "Forbidden"}, status=403)
 
         qs = Clinic.objects.filter(is_deleted=False)
 
         if request.user.role != "owner":
             qs = qs.filter(clinicuser__user=request.user)
 
-        return Response(ClinicSerializer(qs.distinct(), many=True).data)
+        qs = qs.annotate(
+            active_members=Count(
+                "clinicuser__user",
+                filter=Q(
+                    clinicuser__user__is_active=True,
+                    clinicuser__user__is_deleted=False
+                ),
+                distinct=True
+            )
+        )
 
+        return Response(
+            ClinicSerializer(qs.distinct(), many=True).data
+        )
 
 class ClinicDetailView(APIView):
     permission_classes = [IsAuthenticated]

@@ -24,11 +24,11 @@ ROLE_MATRIX = {
     "owner": [p[0] for p in PERMS],
     "president": ["user:create","user:view","user:update", "clinic:create","clinic:view","clinic:update"],
     "manager": ["user:view", "clinic:view", "clinic:update"],
-    "doctor": ["user:view", "clinic:view"],
+    "doctor": [ "clinic:view"],
     "staff": ["clinic:view"],
     "jr_staff": ["clinic:view"],
 }
-
+# "user:view",
 class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         perm_objs = {}
