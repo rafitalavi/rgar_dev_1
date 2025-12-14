@@ -212,10 +212,13 @@ class UserListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id","email","first_name","last_name","role","is_active","clinics" ,"picture" ,"subject_matters","employee_id", "knowledge_level")
+        fields = ("id","email","first_name","last_name","role","is_active","clinics" ,"picture" ,"subject_matters","employee_id", "knowledge_level",  "notify_assessments","notify_tagged_messages")
 
     def get_clinics(self, obj):
         return list(obj.clinicuser_set.values_list("clinic__name", flat=True))
+
+
+
 
 
 
@@ -344,3 +347,28 @@ class PasswordResetSerializer(serializers.Serializer):
         user.set_password(self.validated_data["password1"])
         user.save()
         return user
+    
+    
+# notifications
+class UserNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = (
+            "notify_assessments",
+            "notify_tagged_messages",
+        )
+
+    def validate(self, attrs):
+        user = self.instance  # current logged-in user
+
+        # roles that can edit ONLY ONE notification
+        limited_roles = ["manager","doctor", "staff", "jr_staff"]
+
+        if user.role in limited_roles:
+            # ❌ block assessment toggle
+            if "notify_tagged_messages" in attrs:
+                raise serializers.ValidationError({
+                    "notify_assessments": "You are not allowed to change this setting."
+                })
+
+        return attrs

@@ -7,7 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import User
 from django.shortcuts import get_object_or_404
-from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer
+from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer
 from permissions_app.services import has_permission
 from medical.models import ClinicUser
 
@@ -180,7 +180,24 @@ class PasswordResetView(APIView):
             {"detail": "Password updated successfully"},
             status=status.HTTP_200_OK
         )
-    
+ #notifications
+class UserNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserNotificationSerializer(request.user)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        serializer = UserNotificationSerializer(
+            request.user,
+            data=request.data,
+            partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+   
     
 # delete    
 class DeleteUserView(APIView):

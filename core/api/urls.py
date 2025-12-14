@@ -1,5 +1,5 @@
 from django.urls import path
-from accounts.views import LoginView, CreateUserView, ListUserView, UpdateUserView, DeleteUserView , UserDetailView ,PasswordResetView
+from accounts.views import LoginView, CreateUserView, ListUserView, UpdateUserView, DeleteUserView , UserDetailView ,PasswordResetView , UserNotificationView
 from medical.views import CreateClinicView, ListClinicView, UpdateClinicView, DeleteClinicView , ClinicDetailView
 
 from subject_matters.views import CreateSubjectView, ListSubjectView, UpdateSubjectView , DeleteSubjectView ,SubjectDetailView
@@ -16,6 +16,8 @@ urlpatterns = [
     path("users/<int:user_id>/update/", UpdateUserView.as_view()),
     path("users/password/reset/", PasswordResetView.as_view()),
     path("users/<int:user_id>/delete/", DeleteUserView.as_view()),
+    path("users/notifications/",UserNotificationView.as_view()),
+
     path("clinics/", ListClinicView.as_view()),
     path("clinics/create/", CreateClinicView.as_view()),
     path("clinics/<int:pk>/", ClinicDetailView.as_view()),
