@@ -372,3 +372,19 @@ class UserNotificationSerializer(serializers.ModelSerializer):
                 })
 
         return attrs
+    
+    
+    
+    
+#password 
+
+class OwnerChangePasswordSerializer(serializers.Serializer):
+    new_password = serializers.CharField(min_length=8)
+    new_password2 = serializers.CharField()
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["new_password2"]:
+            raise serializers.ValidationError({
+                "message": ["Passwords do not match"]
+            })
+        return attrs

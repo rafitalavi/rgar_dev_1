@@ -7,11 +7,12 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import User
 from django.shortcuts import get_object_or_404
-from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer
+from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer , OwnerChangePasswordSerializer
 from permissions_app.services import has_permission
 from medical.models import ClinicUser
 from core.utils.pagination import StandardResultsSetPagination
-
+from django.core.exceptions import ObjectDoesNotExist
+from accounts.services import deactivate_user
 #login
 class LoginView(APIView):
     authentication_classes = []
@@ -24,14 +25,27 @@ class LoginView(APIView):
 
         if not user or not user.check_password(request.data.get("password")):
             return Response(
-                {"detail": "Invalid credentials"},
+                {"success": False,
+                "message": "Credentials not matched.",
+                "errors": None,
+                "data": None},
                 status=status.HTTP_401_UNAUTHORIZED
             )
         if not user.is_active:
                 return Response(
-                {"detail": "Account is inactive"},
+                { "success": False,
+                "message": "Account is inactive. Contact administrator.",
+                "errors": None,
+                "data": None,},
                 status=status.HTTP_403_FORBIDDEN
             )
+        if user.is_deleted:
+            return Response({
+                "success": False,
+                "message": "Account has been deleted",
+                "errors": None,
+                "data": None,
+            }, status=status.HTTP_403_FORBIDDEN)
         refresh = RefreshToken.for_user(user)
 
         return Response({
@@ -188,7 +202,7 @@ class PasswordResetView(APIView):
             {"detail": "Password updated successfully"},
             status=status.HTTP_200_OK
         )
- #notifications
+ #notifications off assesment and messege
 class UserNotificationView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -208,26 +222,98 @@ class UserNotificationView(APIView):
    
     
 # delete    
+
 class DeleteUserView(APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, user_id):
+        # 1️⃣ Permission check
         if not has_permission(request.user, "user:delete"):
             return Response(
-                {"detail": "Forbidden"},
-                status=status.HTTP_403_FORBIDDEN
+                {
+                    "success": False,
+                    "message": "You do not have permission to delete users",
+                    "errors": None,
+                    "data": None,
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
 
+        # 2️⃣ User existence check
         try:
             user = User.objects.get(id=user_id, is_deleted=False)
         except User.DoesNotExist:
             return Response(
-                {"detail": "User not found."},
-                status=status.HTTP_404_NOT_FOUND
+                {
+                    "success": False,
+                    "message": "User not found",
+                    "errors": None,
+                    "data": None,
+                },
+                status=status.HTTP_404_NOT_FOUND,
             )
 
-        user.is_deleted = True
-        user.is_active = False
-        user.save()
+        # 3️⃣ Prevent deleting owner
+        if user.role == "owner":
+            return Response(
+                {
+                    "success": False,
+                    "message": "Owner account cannot be deleted",
+                    "errors": None,
+                    "data": None,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        # 4️⃣ Deactivate user (soft delete + logout)
+        deactivate_user(user)
+
+        # 5️⃣ Success response
+        return Response(
+            {
+                "success": True,
+                "message": "User deleted successfully",
+                "errors": None,
+                "data": None,
+            },
+            status=status.HTTP_200_OK,
+        )
+    
+#owner can change password  view
+class OwnerChangeUserPasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        # 🔒 Owner only
+        if request.user.role != "owner":
+            return Response(
+                {"message": "Only owner can change passwords"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user = get_object_or_404(
+            User,
+            id=user_id,
+            is_deleted=False
+        )
+
+        serializer = OwnerChangePasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Password updated successfully",
+                "user_id": user.id,
+                "email": user.email,
+            },
+            status=status.HTTP_200_OK
+        )
+        
+        
+        
+        
+
