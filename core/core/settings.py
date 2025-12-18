@@ -49,7 +49,10 @@ INSTALLED_APPS = [
     "accounts",
     "medical",
     "permissions_app",
-    "subject_matters"
+    "subject_matters",
+    # "chat",
+     "chat.apps.ChatConfig",
+    "notifications",
 ]
 
 

@@ -180,6 +180,28 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    # def create(self, validated_data):
+    #     clinic_ids = validated_data.pop("clinic_ids", [])
+    #     subject_ids = validated_data.pop("subject_ids", [])
+    #     password = validated_data.pop("password")
+
+    #     user = User.objects.create_user(
+    #         password=password,
+    #         **validated_data
+    #     )
+
+    #     if clinic_ids:
+    #         ClinicUser.objects.bulk_create(
+    #             [
+    #                 ClinicUser(user=user, clinic_id=cid)
+    #                 for cid in clinic_ids
+    #             ]
+    #         )
+
+    #     if subject_ids:
+    #         user.subject_matters.set(subject_ids)
+
+    #     return user
     def create(self, validated_data):
         clinic_ids = validated_data.pop("clinic_ids", [])
         subject_ids = validated_data.pop("subject_ids", [])
@@ -190,18 +212,18 @@ class UserCreateSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        if clinic_ids:
-            ClinicUser.objects.bulk_create(
-                [
-                    ClinicUser(user=user, clinic_id=cid)
-                    for cid in clinic_ids
-                ]
+        # ✅ DO NOT use bulk_create (signals required)
+        for cid in clinic_ids:
+            ClinicUser.objects.get_or_create(
+                user=user,
+                clinic_id=cid
             )
 
         if subject_ids:
             user.subject_matters.set(subject_ids)
 
         return user
+
 
 
 
@@ -388,3 +410,8 @@ class OwnerChangePasswordSerializer(serializers.Serializer):
                 "message": ["Passwords do not match"]
             })
         return attrs
+
+#status
+class UserStatusUpdateSerializer(serializers.Serializer):
+    is_active = serializers.BooleanField(required=False)
+    is_blocked = serializers.BooleanField(required=False)

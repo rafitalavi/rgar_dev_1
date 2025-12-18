@@ -7,7 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import User
 from django.shortcuts import get_object_or_404
-from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer , OwnerChangePasswordSerializer
+from .serializers import UserCreateSerializer, UserListSerializer, UserUpdateSerializer , PasswordResetSerializer , UserNotificationSerializer , OwnerChangePasswordSerializer ,UserStatusUpdateSerializer
 from permissions_app.services import has_permission
 from medical.models import ClinicUser
 from core.utils.pagination import StandardResultsSetPagination
@@ -79,7 +79,7 @@ class ListUserView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not has_permission(request.user, "user:view"):
+        if not has_permission(request.user, "listUser:view"):
             return Response({"detail":"Forbidden"}, status=403)
 
         qs = User.objects.filter(is_deleted=False)
@@ -315,5 +315,31 @@ class OwnerChangeUserPasswordView(APIView):
         
         
         
-        
+     #blocked user and active    
 
+class UpdateUserStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, user_id):
+        if not has_permission(request.user, "user:update"):
+            return Response(status=403)
+
+        target = User.objects.filter(id=user_id, is_deleted=False).first()
+        if not target:
+            return Response(status=404)
+
+        # ❌ Cannot block or deactivate owner
+        if target.role == "owner":
+            return Response(
+                {"detail": "Owner cannot be modified"},
+                status=403
+            )
+
+        serializer = UserStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        for field, value in serializer.validated_data.items():
+            setattr(target, field, value)
+
+        target.save(update_fields=serializer.validated_data.keys())
+        return Response({"success": True})

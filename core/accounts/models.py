@@ -50,6 +50,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    is_blocked = models.BooleanField(default=False)
     notify_assessments = models.BooleanField(default=True)
     notify_tagged_messages = models.BooleanField(default=True)
 
