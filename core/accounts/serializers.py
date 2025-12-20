@@ -91,13 +91,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
         allow_null=True,
         max_length=50,
     )
-
+    joining_date = serializers.DateTimeField(required=False)
     email = serializers.EmailField(
         validators=[UniqueValidator(queryset=User.objects.filter(is_deleted=False))]
     )
 
     password = serializers.CharField(write_only=True)
-
+    phone = serializers.CharField(write_only=True ,required=True)
     clinic_ids = serializers.ListField(
         child=serializers.IntegerField(),
         write_only=True,
@@ -128,6 +128,11 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "subject_ids",
             "picture",
             "knowledge_level",
+            "is_active",
+            "is_blocked",
+            "joining_date",
+            "phone"
+            
         )
 
     # ✅ EMPLOYEE ID CHECK
@@ -231,15 +236,24 @@ class UserCreateSerializer(serializers.ModelSerializer):
 #user list
 class UserListSerializer(serializers.ModelSerializer):
     clinics = serializers.SerializerMethodField()
+    subject_matters = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id","email","first_name","last_name","role","is_active","clinics" ,"picture" ,"subject_matters","employee_id", "knowledge_level",  "notify_assessments","notify_tagged_messages")
+        fields = ("id","email","first_name","last_name","full_name","role","is_active","clinics" ,"picture" ,"subject_matters","employee_id", "knowledge_level",  "notify_assessments","notify_tagged_messages", "is_blocked",
+            "joining_date" , "phone")
 
     def get_clinics(self, obj):
         return list(obj.clinicuser_set.values_list("clinic__name", flat=True))
-
-
+    def get_subject_matters(self, obj):
+            if hasattr(obj, 'subject_matters'):
+            # Changed from "subject_matters_title" to "title"
+              return list(obj.subject_matters.values_list("title", flat=True))
+            return [] 
+    def get_full_name(self, obj):
+        """Returns the user's full name"""
+        return f"{obj.first_name} {obj.last_name}".strip()
 
 
 
@@ -278,6 +292,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "clinic_ids",
             "subject_ids",
             "knowledge_level",
+             "is_blocked",
+            "joining_date",
+            "phone"
         )
 
     def get_clinics(self, obj):

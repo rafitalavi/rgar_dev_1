@@ -8,9 +8,29 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/
 """
 
 import os
-
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
-application = get_asgi_application()
+# HTTP application (doesn't need django.setup immediately)
+http_application = get_asgi_application()
+
+def get_websocket_application():
+    """Lazy load WebSocket components after Django is setup"""
+    import django
+    django.setup()  # Setup Django here
+    
+    from channels.routing import URLRouter
+    from chat.ws_jwt import JwtAuthMiddleware
+    import chat.routing
+    
+    return JwtAuthMiddleware(
+        URLRouter(chat.routing.websocket_urlpatterns)
+    )
+
+from channels.routing import ProtocolTypeRouter
+
+application = ProtocolTypeRouter({
+    "http": http_application,
+    "websocket": get_websocket_application(),
+})

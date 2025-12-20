@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Clinic
 
+from accounts.models import User
 class ClinicSerializer(serializers.ModelSerializer):
     active_members = serializers.IntegerField(read_only=True)
     class Meta:
@@ -29,3 +30,25 @@ class ClinicSerializer(serializers.ModelSerializer):
             )
         return value
     
+
+
+
+
+
+
+class UserLiteSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "first_name",
+            "last_name",
+            "full_name",
+            "email",
+            "role",
+        )
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}".strip()

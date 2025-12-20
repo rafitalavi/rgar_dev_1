@@ -28,7 +28,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
 
-   
+    phone = models.CharField(max_length=20 , blank=True , null=False)
     picture = models.ImageField(
         upload_to="users/profile_pictures/",
         null=True,
@@ -55,6 +55,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     notify_tagged_messages = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
+    joining_date = models.DateField(
+        null=True, 
+        blank=True,
+        help_text="Date when user joined (user can provide custom date)"
+    )
+    
 
     objects = UserManager()
     USERNAME_FIELD = "email"

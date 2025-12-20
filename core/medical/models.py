@@ -37,8 +37,6 @@ class Clinic(models.Model):
 
 
 
-from django.db import models
-
 class ClinicUser(models.Model):
     user = models.ForeignKey("accounts.User", on_delete=models.CASCADE)
     clinic = models.ForeignKey(Clinic, on_delete=models.CASCADE)

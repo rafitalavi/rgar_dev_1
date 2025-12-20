@@ -6,6 +6,7 @@ from django.db import IntegrityError
 from .models import Clinic, ClinicUser
 from .serializers import ClinicSerializer
 from django.db.models import Count, Q
+from accounts.models import User
 from permissions_app.services import has_permission
 from .services import delete_clinic_and_users
 from django.shortcuts import get_object_or_404
@@ -136,3 +137,86 @@ class DeleteClinicView(APIView):
 
         delete_clinic_and_users(clinic)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    
+    
+class ClinicUsersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, clinic_id):
+        # 🔐 Permission: owner OR clinic member with clinic:view
+        if request.user.role != "owner":
+            if not has_permission(request.user, "clinic:view"):
+                return Response({"detail": "Forbidden"}, status=403)
+
+            if not ClinicUser.objects.filter(
+                clinic_id=clinic_id,
+                user=request.user
+            ).exists():
+                return Response({"detail": "Forbidden"}, status=403)
+
+        qs = (
+            ClinicUser.objects
+            .filter(
+                clinic_id=clinic_id,
+                user__is_active=True,
+                user__is_deleted=False,
+                user__is_blocked=False,
+            )
+            .select_related("user")
+        )
+
+        # 🔹 role-based filtering
+        role = request.GET.get("role")
+        if role:
+            qs = qs.filter(user__role=role)
+
+        # 🔹 search (name/email)
+        search = (request.GET.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(user__email__icontains=search) |
+                Q(user__first_name__icontains=search) |
+                Q(user__last_name__icontains=search)
+            )
+
+        # 🔹 exclude selected users
+        exclude_ids = request.GET.get("exclude")
+        if exclude_ids:
+            qs = qs.exclude(user_id__in=exclude_ids.split(","))
+
+        qs = qs.order_by("user__first_name", "user__last_name")
+
+        results = [
+            {
+                "id": cu.user.id,
+                "first_name": cu.user.first_name,
+                "last_name": cu.user.last_name,
+                "email": cu.user.email,
+                "role": cu.user.role,
+            }
+            for cu in qs
+        ]
+
+        # 🔹 optional owner injection
+        if request.GET.get("include_owner") == "1":
+            owner = User.objects.filter(
+                role="owner",
+                is_active=True,
+                is_deleted=False
+            ).first()
+            if owner:
+                results.insert(0, {
+                    "id": owner.id,
+                    "first_name": owner.first_name,
+                    "last_name": owner.last_name,
+                    "email": owner.email,
+                    "role": owner.role,
+                    "read_only": True
+                })
+
+        return Response({
+            "clinic_id": clinic_id,
+            "count": len(results),
+            "results": results
+        })

@@ -16,6 +16,7 @@ class ChatRoom(models.Model):
     GROUP_KIND = (
         ("clinic_all", "Clinic All"),
         ("clinic_role", "Clinic Role"),
+        ("clinic_custom", "Clinic Custom"),
     )
 
     room_type = models.CharField(max_length=10, choices=ROOM_TYPE)

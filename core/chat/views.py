@@ -14,10 +14,15 @@ from .models import (
     ChatRoom, ChatParticipant, RoomUserState, UserBlock,
     Message, MessageAttachment, MessageReaction, AiFeedback
 )
+from django.db.models import Q
 from .guards import ensure_room_access
 from .serializers import MessageSerializer
 from .services_rooms import ensure_clinic_group_room, get_or_create_private_room, get_or_create_ai_room, create_custom_group
 from .services_messages import create_message_with_mentions, mark_room_read_and_clear_mentions
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+from chat.realtime import serialize_message_payload
+
 
 # ---- USERS (picker) ----
 class ChatUserPickerView(APIView):
@@ -25,7 +30,7 @@ class ChatUserPickerView(APIView):
 
     def get(self, request):
         search = (request.GET.get("search") or "").strip()
-        qs = User.objects.filter(is_deleted=False, is_active=True)
+        qs = User.objects.filter(is_deleted=False, is_active=True , is_blocked=False)
 
         if not (request.user.role == "owner" or has_permission(request.user, "chat:view_all_users")):
             clinic_ids = ClinicUser.objects.filter(user=request.user).values_list("clinic_id", flat=True)
@@ -70,10 +75,7 @@ class ChatUserPickerView(APIView):
 
 
 
-from django.db.models import Max
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
+
 
 class RoomListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -389,7 +391,7 @@ class CreateClinicGroupView(APIView):
 
 
 
-from django.db.models import Q
+
 
 class MessageListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -442,6 +444,20 @@ class MessageListView(APIView):
                     "me" if block.blocker_id == request.user.id else "other"
                 )
                 can_unblock = block.blocker_id == request.user.id
+            last_message_id = (
+            Message.objects
+            .filter(room_id=room_id)
+            .order_by("-id")
+            .values_list("id", flat=True)
+            .first()
+        )
+
+        if last_message_id:
+            mark_room_read_and_clear_mentions(
+                room_id=room_id,
+                user=request.user,
+              last_message_id=last_message_id
+            )
 
         qs = (
             Message.objects
@@ -559,6 +575,17 @@ class SendMessageView(APIView):
                     args=[msg.id],
                     countdown=180
                 )
+      # REAL-TIME BROADCAST (THIS WAS MISSING)
+        channel_layer = get_channel_layer()
+
+        async_to_sync(channel_layer.group_send)(
+            f"room_{room.id}",
+            {
+                "type": "message_event",
+                "message": serialize_message_payload(msg),
+            }
+        )
+
 
 
         return Response({
