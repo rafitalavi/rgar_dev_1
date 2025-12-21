@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Message ,ChatRoom
 from medical.models import ClinicUser
+from accounts.models import User
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
@@ -100,3 +101,31 @@ class CreateClinicGroupSerializer(serializers.Serializer):
                 )
 
         return attrs
+    
+# chat/serializers.py
+class DirectMessageCreateSerializer(serializers.Serializer):
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+    content = serializers.CharField(allow_blank=False)
+
+    def validate_user_ids(self, values):
+        if len(set(values)) != len(values):
+            raise  serializers.ValidationError({
+            "code": "DUPLICATE_USERS",
+            "message": "Duplicate users are not allowed"
+        })
+
+
+        qs = User.objects.filter(
+            id__in=values,
+            is_active=True,
+            is_deleted=False,
+            is_blocked=False
+        )
+
+        if qs.count() != len(values):
+            raise serializers.ValidationError("One or more users are invalid")
+
+        return values

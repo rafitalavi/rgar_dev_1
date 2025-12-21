@@ -5,7 +5,9 @@ from rest_framework import status
 from django.db import IntegrityError
 from .models import Clinic, ClinicUser
 from .serializers import ClinicSerializer
-from django.db.models import Count, Q
+from django.db.models import Count, Q ,Value
+
+from django.db.models.functions import Concat
 from accounts.models import User
 from permissions_app.services import has_permission
 from .services import delete_clinic_and_users
@@ -140,85 +142,125 @@ class DeleteClinicView(APIView):
     
     
     
-class ClinicUsersView(APIView):
+class ChatUsersView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, clinic_id):
-        # 🔐 Permission: owner OR clinic member with clinic:view
-        if request.user.role != "owner":
-            if not has_permission(request.user, "clinic:view"):
-                return Response({"detail": "Forbidden"}, status=403)
+    def get(self, request):
+        clinic_id = request.GET.get("clinic_id")
+        search = (request.GET.get("search") or "").strip()
+        role = request.GET.get("role")
+        exclude_ids = request.GET.get("exclude")
 
-            if not ClinicUser.objects.filter(
+        # STEP 1: clinic_id must belong to requester (unless owner)
+        if clinic_id and request.user.role != "owner":
+            is_member = ClinicUser.objects.filter(
                 clinic_id=clinic_id,
                 user=request.user
-            ).exists():
-                return Response({"detail": "Forbidden"}, status=403)
+            ).exists()
 
-        qs = (
-            ClinicUser.objects
-            .filter(
-                clinic_id=clinic_id,
-                user__is_active=True,
-                user__is_deleted=False,
-                user__is_blocked=False,
-            )
-            .select_related("user")
+            if not is_member:
+                return Response(
+                    {"detail": "Forbidden: not a member of this clinic"},
+                    status=403
+                )
+
+        # STEP 2: Base queryset (ClinicUser = source of truth)
+        qs = ClinicUser.objects.select_related("user", "clinic").filter(
+            user__is_active=True,
+            user__is_deleted=False,
+            user__is_blocked=False,
         )
 
-        # 🔹 role-based filtering
-        role = request.GET.get("role")
+        # STEP 3: Visibility (shared clinics only)
+        if request.user.role != "owner":
+            my_clinic_ids = ClinicUser.objects.filter(
+                user=request.user
+            ).values_list("clinic_id", flat=True)
+
+            qs = qs.filter(clinic_id__in=my_clinic_ids)
+
+        # STEP 4: explicit clinic filter
+        if clinic_id:
+            qs = qs.filter(clinic_id=clinic_id)
+
+        # STEP 5: exclude self
+        qs = qs.exclude(user=request.user)
+
+        # STEP 6: role filter
         if role:
             qs = qs.filter(user__role=role)
 
-        # 🔹 search (name/email)
-        search = (request.GET.get("search") or "").strip()
+        # STEP 7: full-name search
         if search:
-            qs = qs.filter(
-                Q(user__email__icontains=search) |
-                Q(user__first_name__icontains=search) |
-                Q(user__last_name__icontains=search)
+            qs = qs.annotate(
+                full_name=Concat(
+                    "user__first_name",
+                    Value(" "),
+                    "user__last_name"
+                )
+            ).filter(
+                Q(full_name__icontains=search) |
+                Q(user__email__icontains=search)
             )
 
-        # 🔹 exclude selected users
-        exclude_ids = request.GET.get("exclude")
+        # STEP 8: exclude selected users
         if exclude_ids:
-            qs = qs.exclude(user_id__in=exclude_ids.split(","))
+            exclude_list = [
+                int(x) for x in exclude_ids.split(",") if x.isdigit()
+            ]
+            qs = qs.exclude(user_id__in=exclude_list)
 
         qs = qs.order_by("user__first_name", "user__last_name")
 
-        results = [
+      
+        user_map = {}
+
+        for cu in qs:
+            user = cu.user
+
+            if user.id not in user_map:
+                user_map[user.id] = {
+                    "id": user.id,
+                    "name": (
+                        f"{user.first_name} {user.last_name}".strip()
+                        or user.email
+                    ),
+                    "email": user.email,
+                    "role": user.role,
+                    "clinics": []
+                }
+
+            user_map[user.id]["clinics"].append({
+                "id": cu.clinic.id,
+                "name": cu.clinic.name
+            })
+
+        results = list(user_map.values())
+        # 🔹 MY CLINICS (logged-in user)
+        if request.user.role == "owner":
+            my_clinics_qs = Clinic.objects.filter(is_deleted=False)
+
+        else:
+            my_clinics_qs = Clinic.objects.filter(
+                clinicuser__user=request.user,
+                clinicuser__is_active=True,
+              
+            ).distinct()
+
+        my_clinics = [
             {
-                "id": cu.user.id,
-                "first_name": cu.user.first_name,
-                "last_name": cu.user.last_name,
-                "email": cu.user.email,
-                "role": cu.user.role,
+                "id": clinic.id,
+                "name": clinic.name
             }
-            for cu in qs
+            for clinic in my_clinics_qs
         ]
 
-        # 🔹 optional owner injection
-        if request.GET.get("include_owner") == "1":
-            owner = User.objects.filter(
-                role="owner",
-                is_active=True,
-                is_deleted=False
-            ).first()
-            if owner:
-                results.insert(0, {
-                    "id": owner.id,
-                    "first_name": owner.first_name,
-                    "last_name": owner.last_name,
-                    "email": owner.email,
-                    "role": owner.role,
-                    "read_only": True
-                })
-
-        return Response({
-            "message": "data retirve success",
-            
-            "clinic_id": clinic_id,
-            "count": len(results),
-            "results": results
-        },status=200)
+        return Response(
+            {     "my_clinics": my_clinics,
+                "success": True,
+                "count": len(results),
+                "results": results,
+              
+            },
+            status=200
+        )

@@ -1,6 +1,6 @@
 from django.urls import path
 from accounts.views import LoginView, CreateUserView, ListUserView, UpdateUserView, DeleteUserView , UserDetailView ,PasswordResetView , UserNotificationView ,OwnerChangeUserPasswordView ,UpdateUserStatusView
-from medical.views import CreateClinicView, ListClinicView, UpdateClinicView, DeleteClinicView , ClinicDetailView , ClinicUsersView
+from medical.views import CreateClinicView, ListClinicView, UpdateClinicView, DeleteClinicView , ClinicDetailView , ChatUsersView 
 
 from subject_matters.views import CreateSubjectView, ListSubjectView, UpdateSubjectView , DeleteSubjectView ,SubjectDetailView
 
@@ -8,7 +8,7 @@ from chat.views import (
     ChatUserPickerView, RoomListView, CreatePrivateRoomView, MyAiRoomView,
     EnsureClinicGroupRoomView, CreateClinicGroupView,
     MessageListView, SendMessageView, MarkRoomReadView,
-    MentionCountView, ReactMessageView,  SoftDeleteChatView , BlockUnblockUserView
+    MentionCountView, ReactMessageView,  SoftDeleteChatView , BlockUnblockUserView ,SendDirectMessageView
 )
 from chat.views_user_history import *
 from notifications.views import *
@@ -31,8 +31,8 @@ urlpatterns = [
     path("clinics/<int:clinic_id>/update/", UpdateClinicView.as_view()),
     path("clinics/<int:clinic_id>/delete/", DeleteClinicView.as_view()),
     path(
-    "chat/clinic/<int:clinic_id>/members/",
-    ClinicUsersView.as_view(),
+    "chat/clinic/members/",
+    ChatUsersView.as_view(),
     name="clinic-members"
 ),
 
@@ -58,11 +58,12 @@ urlpatterns = [
     path("rooms/<int:room_id>/send/", SendMessageView.as_view()),
     path("rooms/<int:room_id>/read/", MarkRoomReadView.as_view()),
     path("rooms/<int:room_id>/delete/", SoftDeleteChatView.as_view()),
+    path("rooms/directmesseges/", SendDirectMessageView.as_view()),
 
     path("mentions/count/", MentionCountView.as_view()),
     path("messages/<int:message_id>/react/", ReactMessageView.as_view()),
     path("block/", BlockUnblockUserView.as_view()),
-   
+    
     path("users/<int:user_id>/rooms/", UserRoomHistoryView.as_view()),
     path(
         "users/<int:user_id>/rooms/<int:room_id>/messages/",

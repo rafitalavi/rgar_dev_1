@@ -17,7 +17,7 @@ from .models import (
 
 from django.db.models import Q
 from .guards import ensure_room_access
-from .serializers import MessageSerializer , CreateClinicGroupSerializer
+from .serializers import MessageSerializer , CreateClinicGroupSerializer ,DirectMessageCreateSerializer 
 from .services_rooms import ensure_clinic_group_room, get_or_create_private_room, get_or_create_ai_room, create_custom_group
 from .services_messages import create_message_with_mentions, mark_room_read_and_clear_mentions
 from channels.layers import get_channel_layer
@@ -815,6 +815,84 @@ class SendMessageView(APIView):
                 "message_id": msg.id,
                 "impersonated": is_impersonating
             }, status=201)
+#-----Direct Message send View ------
+class SendDirectMessageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not has_permission(request.user, "chat:create_private"):
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "You cannot send direct messages"
+                    }
+                },
+                status=403
+            )
+
+        serializer = DirectMessageCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user_ids = serializer.validated_data["user_ids"]
+        content = serializer.validated_data["content"]
+
+        channel_layer = get_channel_layer()
+        results = []
+
+        for other_user_id in user_ids:
+            if other_user_id == request.user.id:
+                continue  # safety
+
+            other_user = User.objects.get(id=other_user_id)
+
+            # 🔒 Block check (per user)
+            if request.user.is_blocked or other_user.is_blocked:
+                continue
+
+            # 🔑 Get or create private room
+            room = get_or_create_private_room(
+                request.user.id,
+                other_user.id
+            )
+
+            # 🔹 Ensure RoomUserState
+            RoomUserState.objects.get_or_create(room=room, user=request.user)
+            RoomUserState.objects.get_or_create(room=room, user=other_user)
+
+            # 🔹 Create message
+            message = create_message_with_mentions(
+                room=room,
+                sender=request.user,
+                content=content,
+                mention_user_ids=[]
+            )
+
+            # 🔹 Broadcast
+            async_to_sync(channel_layer.group_send)(
+                f"room_{room.id}",
+                {
+                    "type": "message_event",
+                    "message": serialize_message_payload(message),
+                }
+            )
+
+            results.append(
+                {
+                    "room_id": room.id,
+                    "user_id": other_user.id,
+                    "message_id": message.id
+                }
+            )
+
+        return Response(
+            {
+                "success": True,
+                "results": results
+            },
+            status=201
+        )
 
 
 # ---- MARK READ (reduces tag count) ----
