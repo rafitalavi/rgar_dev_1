@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Message
+from .models import Message ,ChatRoom
 from medical.models import ClinicUser
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.SerializerMethodField()
@@ -59,15 +59,29 @@ class CreateClinicGroupSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"role": "role is required for clinic_role"}
             )
+        if group_kind == "clinic_all":
+            exists = ChatRoom.objects.filter(
+            room_type="group",
+            clinic_id=clinic_id,
+            group_kind="clinic_all"
+        ).exists()
 
+        if exists:
+            raise serializers.ValidationError({
+            "group_kind": {
+                "code": "CLINIC_ALL_EXISTS",
+                "message": "Clinic-wide group already exists for this clinic"
+            }
+        })
         # clinic_custom validation
         if group_kind == "clinic_custom":
             if not user_ids:
                 raise serializers.ValidationError(
-                    {"user_ids": "At least one user must be selected"}
+                    {"code": "CLINIC_ALL_EXISTS",
+                "message": "At least one user needed"}
                 )
 
-            # 🔥 CORE RULE: all users must belong to same clinic
+            #  CORE RULE: all users must belong to same clinic
             clinic_users = set(
                 ClinicUser.objects.filter(
                     clinic_id=clinic_id,
@@ -78,9 +92,10 @@ class CreateClinicGroupSerializer(serializers.Serializer):
             if clinic_users != set(user_ids):
                 raise serializers.ValidationError(
                     {
-                        "user_ids": (
-                            "All selected users must belong to the same clinic"
-                        )
+                        "user_ids":{
+                "code": "CLINIC_ALL_EXISTS",
+                "message": "All selected users must belong to the same clinic"
+            }
                     }
                 )
 
