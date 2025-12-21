@@ -322,7 +322,7 @@ class UpdateUserStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, user_id):
-        if not has_permission(request.user, "user:update"):
+        if not has_permission(request.user, "user:statusupdate"):
             return Response(status=403)
 
         target = User.objects.filter(id=user_id, is_deleted=False).first()

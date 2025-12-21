@@ -8,6 +8,7 @@ PERMS = [
     ("user:update", "Update user"),
     ("user:delete", "Delete user"),
     ("listUser:view", "View users"),
+    ("user:statusupdate", "user Status update"),
     # Clinic Permissions
     ("clinic:create", "Create clinic"),
     ("clinic:view", "View clinics"),

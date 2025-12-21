@@ -10,6 +10,7 @@ from chat.views import (
     MessageListView, SendMessageView, MarkRoomReadView,
     MentionCountView, ReactMessageView,  SoftDeleteChatView , BlockUnblockUserView ,SendDirectMessageView
 )
+from permissions_app.views import ToggleUserPermissionView ,UserPermissionsView
 from chat.views_user_history import *
 from notifications.views import *
 
@@ -24,6 +25,9 @@ urlpatterns = [
     path("users/notifications/",UserNotificationView.as_view()),
     path("users/<int:user_id>/change-password/",  OwnerChangeUserPasswordView.as_view(), ),
     path("users/status/<int:user_id>/", UpdateUserStatusView.as_view()), 
+    path("permissions/users/<int:user_id>/",UserPermissionsView.as_view(),name="toggle-user-permission"),
+    path("permissions/userstgoole/",ToggleUserPermissionView.as_view(),name="toggle-user-permission"),
+    
     
     path("clinics/", ListClinicView.as_view()),
     path("clinics/create/", CreateClinicView.as_view()),
