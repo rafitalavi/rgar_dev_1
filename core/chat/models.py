@@ -35,7 +35,7 @@ class ChatRoom(models.Model):
         null=True,
         blank=True
     )
-
+    is_deleted = models.BooleanField(default=False)
     # only for clinic_role groups
     role = models.CharField(max_length=20, null=True, blank=True)
 
@@ -102,6 +102,7 @@ class Message(models.Model):
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies"
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    is_deleted = models.BooleanField(default=False)
 
     class Meta:
         indexes = [models.Index(fields=["room", "-id"])]
@@ -154,7 +155,7 @@ class MessageReaction(models.Model):
 class AiFeedback(models.Model):
     message = models.ForeignKey(Message, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
-
+    is_deleted = models.BooleanField(default=False)
     reaction = models.CharField(max_length=10, choices=(("like", "Like"), ("dislike", "Dislike")))
     role = models.CharField(max_length=20)
     knowledge_level = models.PositiveSmallIntegerField(default=0)

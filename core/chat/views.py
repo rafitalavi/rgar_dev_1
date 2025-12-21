@@ -14,9 +14,10 @@ from .models import (
     ChatRoom, ChatParticipant, RoomUserState, UserBlock,
     Message, MessageAttachment, MessageReaction, AiFeedback
 )
+
 from django.db.models import Q
 from .guards import ensure_room_access
-from .serializers import MessageSerializer
+from .serializers import MessageSerializer , CreateClinicGroupSerializer
 from .services_rooms import ensure_clinic_group_room, get_or_create_private_room, get_or_create_ai_room, create_custom_group
 from .services_messages import create_message_with_mentions, mark_room_read_and_clear_mentions
 from channels.layers import get_channel_layer
@@ -308,38 +309,59 @@ class EnsureClinicGroupRoomView(APIView):
         return Response({"room_id": room.id, "type":"group"})
 
 # ---- CREATE CUSTOM GROUP (selected users) ----
+
 class CreateClinicGroupView(APIView):
-    """
-    Creates a clinic-wise group:
-    - group_kind=clinic_all  -> all clinic members join
-    - group_kind=clinic_role -> only members of that role join
-    No manual user_ids selection.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # 🔐 Permission
         if not has_permission(request.user, "chat:create_group"):
-            return Response({"detail": "Forbidden"}, status=403)
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "You do not have permission to create Group chats"
+                    }
+                },
+                status=403
+            )
 
-        clinic_id = request.data.get("clinic_id")
-        name = (request.data.get("name") or "").strip()
-        group_kind = request.data.get("group_kind")  # clinic_all | clinic_role
-        role = request.data.get("role")              # required if clinic_role
 
-        if not clinic_id or not name or group_kind not in ("clinic_all", "clinic_role"):
-            return Response({"detail": "clinic_id, name, group_kind required"}, status=400)
+        serializer = CreateClinicGroupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        if group_kind == "clinic_role" and not role:
-            return Response({"detail": "role required for clinic_role"}, status=400)
+        clinic_id = data["clinic_id"]
+        name = data["name"].strip()
+        group_kind = data["group_kind"]
+        role = data.get("role")
+        user_ids = data.get("user_ids", [])
 
-        # creator must belong to clinic unless owner
+        # 🔐 Creator must belong to clinic (unless owner)
         if request.user.role != "owner":
-            if not ClinicUser.objects.filter(user=request.user, clinic_id=clinic_id).exists():
-                return Response({"detail": "Forbidden"}, status=403)
+            if not ClinicUser.objects.filter(
+                clinic_id=clinic_id,
+                user=request.user
+            ).exists():
+                return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "User must belong to a Clinic"
+                    }
+                },
+                status=403
+            )
 
-        # unique per clinic + kind + role + name to avoid duplicates
+
+        # 🔑 Unique key
         safe_name = "-".join(name.lower().split())
-        ukey = f"clinic_custom:{clinic_id}:{group_kind}:{role or 'all'}:{safe_name}"
+        if group_kind == "clinic_custom":
+            ukey = f"clinic_custom:{clinic_id}:{safe_name}"
+        else:
+            ukey = f"clinic_custom:{clinic_id}:{group_kind}:{role or 'all'}:{safe_name}"
 
         room, created = ChatRoom.objects.get_or_create(
             unique_key=ukey,
@@ -352,26 +374,127 @@ class CreateClinicGroupView(APIView):
             }
         )
 
-        # auto-join existing clinic members by rule
-        qs = ClinicUser.objects.filter(clinic_id=clinic_id).select_related("user")
+        # 🔹 Resolve members
+        if group_kind == "clinic_all":
+            qs = ClinicUser.objects.filter(clinic_id=clinic_id)
 
-        if group_kind == "clinic_role":
-            qs = qs.filter(user__role=role)
+        elif group_kind == "clinic_role":
+            qs = ClinicUser.objects.filter(
+                clinic_id=clinic_id,
+                user__role=role
+            )
 
-        # create participant + state for each
+        else:  # clinic_custom
+            qs = ClinicUser.objects.filter(
+                clinic_id=clinic_id,
+                user_id__in=user_ids
+            )
+
+        # 🔹 Auto-add creator if missing
+        if request.user.role != "owner":
+            user_ids = set(qs.values_list("user_id", flat=True))
+            if request.user.id not in user_ids:
+                qs = ClinicUser.objects.filter(
+                    clinic_id=clinic_id,
+                    user_id__in=list(user_ids) + [request.user.id]
+                )
+
+        # 🔹 Create participants + state
         ChatParticipant.objects.bulk_create(
             [ChatParticipant(room=room, user=cu.user) for cu in qs],
             ignore_conflicts=True
         )
+
         RoomUserState.objects.bulk_create(
             [RoomUserState(room=room, user=cu.user) for cu in qs],
             ignore_conflicts=True
         )
 
         return Response(
-            {"room_id": room.id, "type": "group", "created": created, "members": qs.count()},
+            {
+                "room_id": room.id,
+                "type": "group",
+                "group_kind": group_kind,
+                "clinic_id": clinic_id,
+                "created": created,
+                "members": qs.count(),
+            },
             status=201
         )
+
+
+
+# class CreateClinicGroupView(APIView):
+#     """
+#     Creates a clinic-wise group:
+#     - group_kind=clinic_all  -> all clinic members join
+#     - group_kind=clinic_role -> only members of that role join
+#     No manual user_ids selection.
+#     """
+#     permission_classes = [IsAuthenticated]
+
+#     def post(self, request):
+#         if not has_permission(request.user, "chat:create_group"):
+#             return Response({"message": ["Forbidden you don't have permissions"]}, status=403)
+        
+#         clinic_id = request.data.get("clinic_id")
+#         name = (request.data.get("name") or "").strip()
+#         group_kind = request.data.get("group_kind")  # clinic_all | clinic_role
+#         role = request.data.get("role")              # required if clinic_role
+
+#         if not clinic_id or not name or group_kind not in ("clinic_all", "clinic_role"):
+#             return Response({"detail": "clinic_id, name, group_kind required"}, status=400)
+
+#         if group_kind == "clinic_role" and not role:
+#             return Response({"detail": "role required for clinic_role"}, status=400)
+
+#         # creator must belong to clinic unless owner
+#         if request.user.role != "owner":
+#             if not ClinicUser.objects.filter(user=request.user, clinic_id=clinic_id).exists():
+#                 return Response({"detail": "Forbidden"}, status=403)
+
+#         # unique per clinic + kind + role + name to avoid duplicates
+#         safe_name = "-".join(name.lower().split())
+#         ukey = f"clinic_custom:{clinic_id}:{group_kind}:{role or 'all'}:{safe_name}"
+
+#         room, created = ChatRoom.objects.get_or_create(
+#             unique_key=ukey,
+#             defaults={
+#                 "room_type": "group",
+#                 "clinic_id": clinic_id,
+#                 "group_kind": group_kind,
+#                 "role": role if group_kind == "clinic_role" else None,
+#                 "name": name,
+#             }
+#         )
+
+#         # auto-join existing clinic members by rule
+#         qs = ClinicUser.objects.filter(clinic_id=clinic_id).select_related("user")
+
+#         if group_kind == "clinic_role":
+#             qs = qs.filter(user__role=role)
+
+#         # create participant + state for each
+#         ChatParticipant.objects.bulk_create(
+#             [ChatParticipant(room=room, user=cu.user) for cu in qs],
+#             ignore_conflicts=True
+#         )
+#         RoomUserState.objects.bulk_create(
+#             [RoomUserState(room=room, user=cu.user) for cu in qs],
+#             ignore_conflicts=True
+#         )
+
+#         return Response(
+#             {"room_id": room.id, "type": "group", "created": created, "members": qs.count()},
+#             status=201
+#         )
+
+
+
+
+
+
+
 
 # ---- MESSAGES LIST ----
 # class MessageListView(APIView):

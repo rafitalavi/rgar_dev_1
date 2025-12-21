@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Message
-
+from medical.models import ClinicUser
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
@@ -32,3 +32,56 @@ class MessageSerializer(serializers.ModelSerializer):
             return None
         r = obj.reactions.filter(user=req.user).first()
         return r.reaction if r else None
+
+
+
+
+class CreateClinicGroupSerializer(serializers.Serializer):
+    clinic_id = serializers.IntegerField()
+    name = serializers.CharField(max_length=200)
+    group_kind = serializers.ChoiceField(
+        choices=["clinic_all", "clinic_role", "clinic_custom"]
+    )
+    role = serializers.CharField(required=False, allow_null=True)
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False
+    )
+
+    def validate(self, attrs):
+        clinic_id = attrs["clinic_id"]
+        group_kind = attrs["group_kind"]
+        role = attrs.get("role")
+        user_ids = attrs.get("user_ids", [])
+
+        # clinic_role validation
+        if group_kind == "clinic_role" and not role:
+            raise serializers.ValidationError(
+                {"role": "role is required for clinic_role"}
+            )
+
+        # clinic_custom validation
+        if group_kind == "clinic_custom":
+            if not user_ids:
+                raise serializers.ValidationError(
+                    {"user_ids": "At least one user must be selected"}
+                )
+
+            # 🔥 CORE RULE: all users must belong to same clinic
+            clinic_users = set(
+                ClinicUser.objects.filter(
+                    clinic_id=clinic_id,
+                    user_id__in=user_ids
+                ).values_list("user_id", flat=True)
+            )
+
+            if clinic_users != set(user_ids):
+                raise serializers.ValidationError(
+                    {
+                        "user_ids": (
+                            "All selected users must belong to the same clinic"
+                        )
+                    }
+                )
+
+        return attrs
