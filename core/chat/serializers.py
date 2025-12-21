@@ -66,13 +66,13 @@ class CreateClinicGroupSerializer(serializers.Serializer):
             group_kind="clinic_all"
         ).exists()
 
-        if exists:
-            raise serializers.ValidationError({
-            "group_kind": {
-                "code": "CLINIC_ALL_EXISTS",
-                "message": "Clinic-wide group already exists for this clinic"
-            }
-        })
+            if exists:
+                raise serializers.ValidationError({
+                "group_kind": {
+                    "code": "CLINIC_ALL_EXISTS",
+                    "message": "Clinic-wide group already exists for this clinic"
+                }
+            })
         # clinic_custom validation
         if group_kind == "clinic_custom":
             if not user_ids:

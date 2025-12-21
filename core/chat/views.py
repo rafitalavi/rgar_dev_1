@@ -76,42 +76,12 @@ class ChatUserPickerView(APIView):
 
 
 
-
-
 class RoomListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # 🔹 Owner / special roles: read-only access to all rooms
-        if has_permission(request.user, "chat:view_all_history"):
-            rooms = ChatRoom.objects.prefetch_related(
-                "participants__user"
-            ).order_by("-id")[:200]
-
-            return Response({
-                "read_only": True,
-                "results": [
-                    {
-                        "room_id": r.id,
-                        "type": r.room_type,
-                        "clinic_id": r.clinic_id,
-                        "name": r.name,
-                        "member_count": r.participants.count(),
-                        "members": [
-                            {
-                                "id": p.user.id,
-                                "name": f"{p.user.first_name} {p.user.last_name}".strip(),
-                                "role": p.user.role,
-                            }
-                            for p in r.participants.all()
-                        ],
-                    }
-                    for r in rooms
-                ]
-            })
-
-        # 🔹 Normal users: only their rooms
-        rooms = ChatRoom.objects.filter(
+        # 🔹 Rooms where user is a participant (NORMAL MODE)
+        participant_rooms = ChatRoom.objects.filter(
             participants__user=request.user,
             user_states__user=request.user,
             user_states__is_deleted=False
@@ -119,16 +89,43 @@ class RoomListView(APIView):
             "participants__user"
         ).order_by("-id")[:200]
 
-        # 🔹 Get last message per room
+        if participant_rooms.exists():
+            rooms = participant_rooms
+            read_only = False
+        else:
+            # 🔹 Audit-only rooms (OWNER / special roles)
+            if not has_permission(request.user, "chat:view_all_history"):
+                return Response({"detail": "Forbidden"}, status=403)
+
+            rooms = ChatRoom.objects.prefetch_related(
+                "participants__user"
+            ).order_by("-id")[:200]
+            read_only = True
+
+        # 🔹 Last messages
         last_map = (
             Message.objects
             .filter(room__in=rooms)
             .values("room_id")
-            .annotate(last_id=Max("id"))
+            .annotate(
+                last_id=Max("id"),
+                last_message_at=Max("created_at"),
+            )
         )
-        last_by_room = {x["room_id"]: x["last_id"] for x in last_map}
 
-        # 🔹 User states
+        last_by_room = {
+            x["room_id"]: {
+                "last_id": x["last_id"],
+                "last_message_at": x["last_message_at"],
+            }
+            for x in last_map
+        }
+        last_sender_by_room = {
+        m.room_id: m.sender_id
+        for m in Message.objects.filter(
+            id__in=[x["last_id"] for x in last_map]
+        )
+    }
         states = {
             s.room_id: s
             for s in RoomUserState.objects.filter(room__in=rooms, user=request.user)
@@ -136,13 +133,21 @@ class RoomListView(APIView):
 
         out = []
         for r in rooms:
-            last_id = last_by_room.get(r.id)
+            last_info = last_by_room.get(r.id, {})
+            last_id = last_info.get("last_id")
+            last_message_at = last_info.get("last_message_at")
+            last_sender_id = last_sender_by_room.get(r.id)
             state = states.get(r.id)
             last_read = state.last_read_message_id if state else None
 
-            unread = bool(last_id and (last_read is None or last_id > last_read))
-
+            unread = bool(
+    not read_only and
+    last_id and
+    last_sender_id != request.user.id and  # ✅ KEY FIX
+    (last_read is None or last_id > last_read)
+)
             out.append({
+                  "last_message_at": last_message_at,
                 "room_id": r.id,
                 "type": r.room_type,
                 "clinic_id": r.clinic_id,
@@ -152,7 +157,8 @@ class RoomListView(APIView):
                 "members": [
                     {
                         "id": p.user.id,
-                        "name": f"{p.user.first_name} {p.user.last_name}".strip(),
+                        "name": f"{p.user.first_name} {p.user.last_name}".strip()
+                               or p.user.email,
                         "role": p.user.role,
                     }
                     for p in r.participants.all()
@@ -160,9 +166,98 @@ class RoomListView(APIView):
             })
 
         return Response({
-            "read_only": False,
+            "read_only": read_only,
             "results": out
         })
+
+
+
+
+# class RoomListView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         # 🔹 Owner / special roles: read-only access to all rooms
+#         if has_permission(request.user, "chat:view_all_history"):
+#             rooms = ChatRoom.objects.prefetch_related(
+#                 "participants__user"
+#             ).order_by("-id")[:200]
+
+#             return Response({
+#                 "read_only": True,
+#                 "results": [
+#                     {
+#                         "room_id": r.id,
+#                         "type": r.room_type,
+#                         "clinic_id": r.clinic_id,
+#                         "name": r.name,
+#                         "member_count": r.participants.count(),
+#                         "members": [
+#                             {
+#                                 "id": p.user.id,
+#                                 "name": f"{p.user.first_name} {p.user.last_name}".strip(),
+#                                 "role": p.user.role,
+#                             }
+#                             for p in r.participants.all()
+#                         ],
+#                     }
+#                     for r in rooms
+#                 ]
+#             })
+
+#         # 🔹 Normal users: only their rooms
+#         rooms = ChatRoom.objects.filter(
+#             participants__user=request.user,
+#             user_states__user=request.user,
+#             user_states__is_deleted=False
+#         ).distinct().prefetch_related(
+#             "participants__user"
+#         ).order_by("-id")[:200]
+
+#         # 🔹 Get last message per room
+#         last_map = (
+#             Message.objects
+#             .filter(room__in=rooms)
+#             .values("room_id")
+#             .annotate(last_id=Max("id"))
+#         )
+#         last_by_room = {x["room_id"]: x["last_id"] for x in last_map}
+
+#         # 🔹 User states
+#         states = {
+#             s.room_id: s
+#             for s in RoomUserState.objects.filter(room__in=rooms, user=request.user)
+#         }
+
+#         out = []
+#         for r in rooms:
+#             last_id = last_by_room.get(r.id)
+#             state = states.get(r.id)
+#             last_read = state.last_read_message_id if state else None
+
+#             unread = bool(last_id and (last_read is None or last_id > last_read))
+
+#             out.append({
+#                 "room_id": r.id,
+#                 "type": r.room_type,
+#                 "clinic_id": r.clinic_id,
+#                 "name": r.name,
+#                 "unread": unread,
+#                 "member_count": r.participants.count(),
+#                 "members": [
+#                     {
+#                         "id": p.user.id,
+#                         "name": f"{p.user.first_name} {p.user.last_name}".strip(),
+#                         "role": p.user.role,
+#                     }
+#                     for p in r.participants.all()
+#                 ],
+#             })
+
+#         return Response({
+#             "read_only": False,
+#             "results": out
+#         })
 
 
 # ---- CREATE PRIVATE ----
@@ -321,12 +416,11 @@ class CreateClinicGroupView(APIView):
                     "success": False,
                     "error": {
                         "code": "FORBIDDEN",
-                        "message": "You do not have permission to create Group chats"
+                        "message": "You do not have permission to create group chats"
                     }
                 },
                 status=403
             )
-
 
         serializer = CreateClinicGroupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -345,23 +439,24 @@ class CreateClinicGroupView(APIView):
                 user=request.user
             ).exists():
                 return Response(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "FORBIDDEN",
-                        "message": "User must belong to a Clinic"
-                    }
-                },
-                status=403
-            )
-
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "NOT_CLINIC_MEMBER",
+                            "message": "User must belong to the selected clinic"
+                        }
+                    },
+                    status=403
+                )
 
         # 🔑 Unique key
         safe_name = "-".join(name.lower().split())
-        if group_kind == "clinic_custom":
+        if group_kind == "clinic_all":
+            ukey = f"clinic_all:{clinic_id}"
+        elif group_kind == "clinic_role":
+            ukey = f"clinic_role:{clinic_id}:{role}"
+        else:  # clinic_custom
             ukey = f"clinic_custom:{clinic_id}:{safe_name}"
-        else:
-            ukey = f"clinic_custom:{clinic_id}:{group_kind}:{role or 'all'}:{safe_name}"
 
         room, created = ChatRoom.objects.get_or_create(
             unique_key=ukey,
@@ -374,7 +469,7 @@ class CreateClinicGroupView(APIView):
             }
         )
 
-        # 🔹 Resolve members
+        # 🔹 Resolve members (ONCE)
         if group_kind == "clinic_all":
             qs = ClinicUser.objects.filter(clinic_id=clinic_id)
 
@@ -390,14 +485,14 @@ class CreateClinicGroupView(APIView):
                 user_id__in=user_ids
             )
 
-        # 🔹 Auto-add creator if missing
-        if request.user.role != "owner":
-            user_ids = set(qs.values_list("user_id", flat=True))
-            if request.user.id not in user_ids:
-                qs = ClinicUser.objects.filter(
-                    clinic_id=clinic_id,
-                    user_id__in=list(user_ids) + [request.user.id]
-                )
+        # 🔹 Always include creator
+        member_ids = set(qs.values_list("user_id", flat=True))
+        member_ids.add(request.user.id)
+
+        qs = ClinicUser.objects.filter(
+            clinic_id=clinic_id,
+            user_id__in=member_ids
+        )
 
         # 🔹 Create participants + state
         ChatParticipant.objects.bulk_create(
@@ -412,12 +507,15 @@ class CreateClinicGroupView(APIView):
 
         return Response(
             {
-                "room_id": room.id,
-                "type": "group",
-                "group_kind": group_kind,
-                "clinic_id": clinic_id,
-                "created": created,
-                "members": qs.count(),
+                "success": True,
+                "data": {
+                    "room_id": room.id,
+                    "type": "group",
+                    "group_kind": group_kind,
+                    "clinic_id": clinic_id,
+                    "created": created,
+                    "members": qs.count(),
+                }
             },
             status=201
         )
@@ -521,7 +619,12 @@ class MessageListView(APIView):
 
     def get(self, request, room_id):
         # owner/history viewer can read any room
-        if has_permission(request.user, "chat:view_all_history"):
+        is_participant = ChatParticipant.objects.filter(
+            room_id=room_id,
+            user=request.user
+        ).exists()
+
+        if has_permission(request.user, "chat:view_all_history") and not is_participant:
             qs = (
                 Message.objects
                 .filter(room_id=room_id)
@@ -567,21 +670,8 @@ class MessageListView(APIView):
                     "me" if block.blocker_id == request.user.id else "other"
                 )
                 can_unblock = block.blocker_id == request.user.id
-            last_message_id = (
-            Message.objects
-            .filter(room_id=room_id)
-            .order_by("-id")
-            .values_list("id", flat=True)
-            .first()
-        )
 
-        if last_message_id:
-            mark_room_read_and_clear_mentions(
-                room_id=room_id,
-                user=request.user,
-              last_message_id=last_message_id
-            )
-
+        # 🔹 Fetch messages FIRST
         qs = (
             Message.objects
             .filter(room_id=room_id)
@@ -589,6 +679,15 @@ class MessageListView(APIView):
             .prefetch_related("attachments", "reactions")
             .order_by("-id")[:50]
         )
+
+        # 🔹 Mark as read HERE (safe)
+        last_message_id = qs[0].id if qs else None
+        if last_message_id:
+            mark_room_read_and_clear_mentions(
+                room_id=room_id,
+                user=request.user,
+                last_message_id=last_message_id
+            )
 
         return Response({
             "read_only": False,
@@ -600,6 +699,7 @@ class MessageListView(APIView):
                 qs, many=True, context={"request": request}
             ).data
         })
+
 
 
 # ---- SEND MESSAGE ----

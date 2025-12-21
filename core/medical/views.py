@@ -216,7 +216,9 @@ class ClinicUsersView(APIView):
                 })
 
         return Response({
+            "message": "data retirve success",
+            
             "clinic_id": clinic_id,
             "count": len(results),
             "results": results
-        })
+        },status=200)
