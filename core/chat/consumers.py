@@ -102,3 +102,11 @@ class ChatRoomConsumer(AsyncJsonWebsocketConsumer):
                 "user_id": event["user_id"],
             }
         )
+    async def reaction_event(self, event):
+        await self.send_json({
+            "type": "reaction",
+            "message_id": event["message_id"],
+            "reactions": event["reactions"],
+            "user_id": event["user_id"],
+            "reaction": event["reaction"],
+        })

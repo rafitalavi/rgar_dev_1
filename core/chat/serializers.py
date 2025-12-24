@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Message ,ChatRoom
 from medical.models import ClinicUser
 from accounts.models import User
+
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
@@ -10,27 +11,75 @@ class MessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Message
-        fields = ("id","room_id","content","is_ai","created_at","parent_message_id","sender","attachments","reactions","my_reaction")
+        fields = (
+            "id",
+            "room_id",
+            "content",
+            "is_ai",
+            "created_at",
+            "parent_message_id",
+            "sender",
+            "attachments",
+            "reactions",
+            "my_reaction",
+        )
 
     def get_sender(self, obj):
         if not obj.sender:
             return None
         u = obj.sender
-        return {"id": u.id, "name": f"{u.first_name} {u.last_name}".strip(), "role": u.role}
+        return {
+            "id": u.id,
+            "name": f"{u.first_name} {u.last_name}".strip() or u.email,
+            "role": u.role,
+        }
 
     def get_attachments(self, obj):
-        return [{"id": a.id, "url": a.file.url, "type": a.attachment_type} for a in obj.attachments.all()]
+        return [
+            {
+                "id": a.id,
+                "url": a.file.url,
+                "type": a.attachment_type,
+            }
+            for a in obj.attachments.all()
+        ]
 
     def get_reactions(self, obj):
+        likes = obj.reactions.filter(reaction="like").select_related("user")
+        dislikes = obj.reactions.filter(reaction="dislike").select_related("user")
+
         return {
-            "like": obj.reactions.filter(reaction="like").count(),
-            "dislike": obj.reactions.filter(reaction="dislike").count(),
+            "like": {
+                "count": likes.count(),
+                "users": [
+                    {
+                        "id": r.user.id,
+                        "name": f"{r.user.first_name} {r.user.last_name}".strip()
+                                or r.user.email,
+                        "role": r.user.role,
+                    }
+                    for r in likes
+                ],
+            },
+            "dislike": {
+                "count": dislikes.count(),
+                "users": [
+                    {
+                        "id": r.user.id,
+                        "name": f"{r.user.first_name} {r.user.last_name}".strip()
+                                or r.user.email,
+                        "role": r.user.role,
+                    }
+                    for r in dislikes
+                ],
+            },
         }
 
     def get_my_reaction(self, obj):
         req = self.context.get("request")
         if not req or req.user.is_anonymous:
             return None
+
         r = obj.reactions.filter(user=req.user).first()
         return r.reaction if r else None
 
@@ -170,3 +219,43 @@ class BlockUnblockUserSerializer(serializers.Serializer):
         ).exists():
             raise serializers.ValidationError("User not found")
         return value
+
+
+
+
+class BlockGroupMemberSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    action = serializers.ChoiceField(choices=["block", "unblock"])
+
+
+
+
+from .models import MessageReaction
+
+class ReactionListSerializer(serializers.ModelSerializer):
+    message_id = serializers.IntegerField(source="message.id")
+    message = serializers.CharField(source="message.content")
+    room_id = serializers.IntegerField(source="message.room_id")
+    clinic_id = serializers.IntegerField(source="message.room.clinic_id")
+    reacted_by = serializers.SerializerMethodField()
+    reacted_at = serializers.DateTimeField(source="created_at")
+
+    class Meta:
+        model = MessageReaction
+        fields = (
+            "message_id",
+            "message",
+            "reaction",
+            "room_id",
+            "clinic_id",
+            "reacted_by",
+            "reacted_at",
+        )
+
+    def get_reacted_by(self, obj):
+        user = obj.user
+        return {
+            "id": user.id,
+            "name": f"{user.first_name} {user.last_name}".strip(),
+            "role": user.role,
+        }

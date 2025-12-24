@@ -59,3 +59,14 @@ def broadcast_message(message: Message):
             "message": payload,
         }
     )
+
+
+
+# chat/realtime.py
+
+def serialize_reaction_payload(message, user, reaction):
+    return {
+        "message_id": message.id,
+        "user_id": user.id,
+        "reaction": reaction,  # "like" | "dislike" | None
+    }

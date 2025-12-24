@@ -11,6 +11,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ("doctor", "Doctor"),
         ("staff", "Staff"),
         ("jr_staff", "Junior Staff"),
+        ("ai", "AI"),
     )
 
     employee_id = models.CharField(
