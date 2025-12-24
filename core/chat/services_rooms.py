@@ -1,14 +1,39 @@
 from django.db import transaction
 from medical.models import ClinicUser, Clinic
 from .models import ChatRoom, ChatParticipant, RoomUserState, UserBlock
+from accounts.models import User
 
+# @transaction.atomic
+# def ensure_clinic_group_room(clinic: Clinic) -> ChatRoom:
+#     room, _ = ChatRoom.objects.get_or_create(room_type="group", clinic=clinic, name=f"{clinic.name} - All Staff")
+#     user_ids = list(ClinicUser.objects.filter(clinic=clinic).values_list("user_id", flat=True))
+
+#     ChatParticipant.objects.bulk_create([ChatParticipant(room=room, user_id=u) for u in user_ids], ignore_conflicts=True)
+#     RoomUserState.objects.bulk_create([RoomUserState(room=room, user_id=u) for u in user_ids], ignore_conflicts=True)
+#     return room
 @transaction.atomic
 def ensure_clinic_group_room(clinic: Clinic) -> ChatRoom:
-    room, _ = ChatRoom.objects.get_or_create(room_type="group", clinic=clinic, name=f"{clinic.name} - All Staff")
-    user_ids = list(ClinicUser.objects.filter(clinic=clinic).values_list("user_id", flat=True))
+    room, _ = ChatRoom.objects.get_or_create(
+        room_type="group",
+        clinic=clinic,
+        name=f"{clinic.name} - All Staff"
+    )
 
-    ChatParticipant.objects.bulk_create([ChatParticipant(room=room, user_id=u) for u in user_ids], ignore_conflicts=True)
-    RoomUserState.objects.bulk_create([RoomUserState(room=room, user_id=u) for u in user_ids], ignore_conflicts=True)
+    user_ids = list(
+        ClinicUser.objects.filter(clinic=clinic)
+        .values_list("user_id", flat=True)
+    )
+
+    ChatParticipant.objects.bulk_create(
+        [ChatParticipant(room=room, user_id=u) for u in user_ids],
+        ignore_conflicts=True
+    )
+
+    RoomUserState.objects.bulk_create(
+        [RoomUserState(room=room, user_id=u) for u in user_ids],
+        ignore_conflicts=True
+    )
+
     return room
 
 @transaction.atomic
@@ -72,13 +97,39 @@ def get_or_create_private_room(user_id: int, other_id: int) -> ChatRoom:
 
 @transaction.atomic
 def get_or_create_ai_room(user_id: int) -> ChatRoom:
+    ai_user = User.objects.get(role="ai")  # ✅ ROLE BASED
+
     key = f"ai:{user_id}"
-    room = ChatRoom.objects.filter(room_type="ai", unique_key=key).first()
-    if room:
-        return room
-    room = ChatRoom.objects.create(room_type="ai", unique_key=key, name="AI Assistant")
-    ChatParticipant.objects.create(room=room, user_id=user_id)
-    RoomUserState.objects.create(room=room, user_id=user_id)
+
+    room, _ = ChatRoom.objects.get_or_create(
+        room_type="ai",
+        unique_key=key,
+        defaults={"name": "AI Assistant"}
+    )
+
+    # 🔹 Human participant
+    ChatParticipant.objects.get_or_create(
+        room=room,
+        user_id=user_id
+    )
+    RoomUserState.objects.get_or_create(
+        room=room,
+        user_id=user_id,
+        defaults={"is_deleted": False}
+    )
+
+    
+    
+    ChatParticipant.objects.get_or_create(
+        room=room,
+        user=ai_user
+    )
+    RoomUserState.objects.get_or_create(
+        room=room,
+        user=ai_user,
+        defaults={"is_deleted": False}
+    )
+
     return room
 
 @transaction.atomic

@@ -84,7 +84,7 @@ class ListUserView(APIView):
             return Response({"detail":"Forbidden"}, status=403)
 
         qs = User.objects.filter(is_deleted=False)
-        qs = qs.exclude(role="owner")
+        qs = qs.exclude(role="owner").exclude(role="ai")
         search = request.GET.get("search")
         role = request.GET.get("role")
         clinic = request.GET.get("clinic")

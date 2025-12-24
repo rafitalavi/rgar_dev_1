@@ -15,6 +15,8 @@ from .models import (
     Message, MessageAttachment, MessageReaction, AiFeedback , UserChatHistoryPreference
 )
 from notifications.models import Notification
+from chat.services_ai import get_reply ,send_ai_message
+
 
 from django.db.models import Q
 from .guards import ensure_room_access
@@ -352,7 +354,7 @@ class CreateClinicGroupView(APIView):
         role = data.get("role")
         user_ids = data.get("user_ids", [])
 
-        # 🔐 Creator must belong to clinic (unless owner)
+        # Creator must belong to clinic (unless owner)
         if request.user.role != "owner":
             if not ClinicUser.objects.filter(
                 clinic_id=clinic_id,
@@ -369,13 +371,13 @@ class CreateClinicGroupView(APIView):
                     status=403
                 )
 
-        # 🔑 Unique key
+        
         safe_name = "-".join(name.lower().split())
         if group_kind == "clinic_all":
             ukey = f"clinic_all:{clinic_id}"
         elif group_kind == "clinic_role":
             ukey = f"clinic_role:{clinic_id}:{role}"
-        else:  # clinic_custom
+        else:
             ukey = f"clinic_custom:{clinic_id}:{safe_name}"
 
         room, created = ChatRoom.objects.get_or_create(
@@ -389,39 +391,55 @@ class CreateClinicGroupView(APIView):
             }
         )
 
-        # 🔹 Resolve members (ONCE)
+     
+
         if group_kind == "clinic_all":
-            qs = ClinicUser.objects.filter(clinic_id=clinic_id)
+            users_qs = User.objects.filter(
+                clinicuser__clinic_id=clinic_id,
+                is_active=True,
+                is_deleted=False
+            )
 
         elif group_kind == "clinic_role":
-            qs = ClinicUser.objects.filter(
-                clinic_id=clinic_id,
-                user__role=role
+            users_qs = User.objects.filter(
+                clinicuser__clinic_id=clinic_id,
+                role=role,
+                is_active=True,
+                is_deleted=False
             )
 
         else:  # clinic_custom
-            qs = ClinicUser.objects.filter(
-                clinic_id=clinic_id,
-                user_id__in=user_ids
+            users_qs = User.objects.filter(
+                clinicuser__clinic_id=clinic_id,
+                id__in=user_ids,
+                is_active=True,
+                is_deleted=False
             )
 
         # 🔹 Always include creator
-        member_ids = set(qs.values_list("user_id", flat=True))
+        member_ids = set(users_qs.values_list("id", flat=True))
         member_ids.add(request.user.id)
 
-        qs = ClinicUser.objects.filter(
-            clinic_id=clinic_id,
-            user_id__in=member_ids
-        )
+        # 🔹 Always include AI user
+        ai_user = User.objects.filter(
+            role="ai",
+            is_active=True,
+            is_deleted=False
+        ).first()
+        if ai_user:
+            member_ids.add(ai_user.id)
 
-        # 🔹 Create participants + state
+        final_users = User.objects.filter(id__in=member_ids)
+
+
+
         ChatParticipant.objects.bulk_create(
-            [ChatParticipant(room=room, user=cu.user) for cu in qs],
+            [ChatParticipant(room=room, user=u) for u in final_users],
             ignore_conflicts=True
         )
 
         RoomUserState.objects.bulk_create(
-            [RoomUserState(room=room, user=cu.user) for cu in qs],
+            [RoomUserState(room=room, user=u) for u in final_users],
             ignore_conflicts=True
         )
 
@@ -434,11 +452,13 @@ class CreateClinicGroupView(APIView):
                     "group_kind": group_kind,
                     "clinic_id": clinic_id,
                     "created": created,
-                    "members": qs.count(),
+                    "members": final_users.count(),
+                    "ai_added": bool(ai_user),
                 }
             },
             status=201
         )
+
 
 
 
@@ -791,8 +811,20 @@ class SendMessageView(APIView):
                     countdown=180
                 )
       # REAL-TIME BROADCAST (THIS WAS MISSING)
-        channel_layer = get_channel_layer()
+        if room.room_type == "ai" and not is_impersonating:
+            
 
+            ai_reply = get_reply(content)
+
+            send_ai_message(
+                room=room,
+                content=ai_reply
+            )
+
+        # =========================
+        # 🔴REAL-TIME BROADCAST
+        # =========================
+        channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             f"room_{room.id}",
             {
@@ -801,14 +833,15 @@ class SendMessageView(APIView):
             }
         )
 
-
-
-        return Response({
-                "success":True,
+        return Response(
+            {
+                "success": True,
                 "message_id": msg.id,
                 "message_body": msg.content,
                 "impersonated": is_impersonating
-            }, status=201)
+            },
+            status=201
+        )
 #-----Direct Message send View ------
 class SendDirectMessageView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1420,6 +1453,7 @@ class ChatRoomMembersView(APIView):
             .filter(room=room)
             .select_related("user")
             .prefetch_related("user__roomuserstate_set")
+            .exclude(user__role="ai")
         )
 
         # Build state map (FAST)
