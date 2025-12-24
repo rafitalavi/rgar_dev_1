@@ -29,6 +29,47 @@ def get_or_create_private_room(user_id: int, other_id: int) -> ChatRoom:
     RoomUserState.objects.bulk_create([RoomUserState(room=room, user_id=a), RoomUserState(room=room, user_id=b)])
     return room
 
+
+# @transaction.atomic
+# def get_or_create_private_room(user_id: int, other_id: int) -> ChatRoom:
+#     # 🔒 Block check
+#     if UserBlock.objects.filter(
+#         blocker_id=user_id, blocked_id=other_id
+#     ).exists() or UserBlock.objects.filter(
+#         blocker_id=other_id, blocked_id=user_id
+#     ).exists():
+#         raise PermissionError("Chat not allowed (blocked).")
+
+#     a, b = sorted([user_id, other_id])
+#     key = f"private:{a}:{b}"
+
+#     # ✅ Atomic get_or_create
+#     room, _ = ChatRoom.objects.get_or_create(
+#         room_type="private",
+#         unique_key=key,
+#         defaults={"name": ""}
+#     )
+
+#     # ✅ Participants (safe)
+#     ChatParticipant.objects.get_or_create(room=room, user_id=a)
+#     ChatParticipant.objects.get_or_create(room=room, user_id=b)
+
+#     # ✅ User states (CRITICAL)
+#     RoomUserState.objects.get_or_create(
+#         room=room,
+#         user_id=a,
+#         defaults={"is_deleted": False}
+#     )
+#     RoomUserState.objects.get_or_create(
+#         room=room,
+#         user_id=b,
+#         defaults={"is_deleted": False}
+#     )
+
+#     return room
+
+
+
 @transaction.atomic
 def get_or_create_ai_room(user_id: int) -> ChatRoom:
     key = f"ai:{user_id}"

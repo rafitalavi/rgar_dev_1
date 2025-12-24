@@ -8,7 +8,7 @@ from chat.views import (
     ChatUserPickerView, RoomListView, CreatePrivateRoomView, MyAiRoomView,
     EnsureClinicGroupRoomView, CreateClinicGroupView,
     MessageListView, SendMessageView, MarkRoomReadView,
-    MentionCountView, ReactMessageView,  SoftDeleteChatView , BlockUnblockUserView ,SendDirectMessageView
+    MentionCountView, ReactMessageView,  SoftDeleteChatView , BlockUnblockUserView ,SendDirectMessageView ,AddGroupMembersView ,ChatRoomMembersView ,BlockGroupMemberView,
 )
 from permissions_app.views import ToggleUserPermissionView ,UserPermissionsView
 from chat.views_user_history import *
@@ -62,7 +62,11 @@ urlpatterns = [
     path("rooms/<int:room_id>/send/", SendMessageView.as_view()),
     path("rooms/<int:room_id>/read/", MarkRoomReadView.as_view()),
     path("rooms/<int:room_id>/delete/", SoftDeleteChatView.as_view()),
-    path("rooms/directmesseges/", SendDirectMessageView.as_view()),
+    path("rooms/directmesseges/", SendDirectMessageView.as_view()),   
+    path("rooms/<int:room_id>/members/add/" , AddGroupMembersView.as_view()),
+    path("rooms/<int:room_id>/members/", ChatRoomMembersView.as_view()),
+    path("rooms/<int:room_id>/member/block/" , BlockGroupMemberView.as_view()),
+
 
     path("mentions/count/", MentionCountView.as_view()),
     path("messages/<int:message_id>/react/", ReactMessageView.as_view()),

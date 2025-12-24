@@ -12,12 +12,13 @@ from django.utils import timezone
 from django.db.models import Q
 from .models import (
     ChatRoom, ChatParticipant, RoomUserState, UserBlock,
-    Message, MessageAttachment, MessageReaction, AiFeedback
+    Message, MessageAttachment, MessageReaction, AiFeedback , UserChatHistoryPreference
 )
+from notifications.models import Notification
 
 from django.db.models import Q
 from .guards import ensure_room_access
-from .serializers import MessageSerializer , CreateClinicGroupSerializer ,DirectMessageCreateSerializer 
+from .serializers import MessageSerializer , CreateClinicGroupSerializer ,DirectMessageCreateSerializer , AddGroupMembersSerializer ,BlockGroupMemberSerializer , BlockUnblockUserSerializer
 from .services_rooms import ensure_clinic_group_room, get_or_create_private_room, get_or_create_ai_room, create_custom_group
 from .services_messages import create_message_with_mentions, mark_room_read_and_clear_mentions
 from channels.layers import get_channel_layer
@@ -82,12 +83,13 @@ class RoomListView(APIView):
     def get(self, request):
         # 🔹 Rooms where user is a participant (NORMAL MODE)
         participant_rooms = ChatRoom.objects.filter(
-            participants__user=request.user,
-            user_states__user=request.user,
-            user_states__is_deleted=False
-        ).distinct().prefetch_related(
-            "participants__user"
-        ).order_by("-id")[:200]
+        participants__user=request.user,
+        user_states__user=request.user,
+        user_states__is_blocked=False,
+    ).distinct().prefetch_related(
+        "participants__user"
+    ).order_by("-id")[:200]
+
 
         if participant_rooms.exists():
             rooms = participant_rooms
@@ -173,91 +175,7 @@ class RoomListView(APIView):
 
 
 
-# class RoomListView(APIView):
-#     permission_classes = [IsAuthenticated]
 
-#     def get(self, request):
-#         # 🔹 Owner / special roles: read-only access to all rooms
-#         if has_permission(request.user, "chat:view_all_history"):
-#             rooms = ChatRoom.objects.prefetch_related(
-#                 "participants__user"
-#             ).order_by("-id")[:200]
-
-#             return Response({
-#                 "read_only": True,
-#                 "results": [
-#                     {
-#                         "room_id": r.id,
-#                         "type": r.room_type,
-#                         "clinic_id": r.clinic_id,
-#                         "name": r.name,
-#                         "member_count": r.participants.count(),
-#                         "members": [
-#                             {
-#                                 "id": p.user.id,
-#                                 "name": f"{p.user.first_name} {p.user.last_name}".strip(),
-#                                 "role": p.user.role,
-#                             }
-#                             for p in r.participants.all()
-#                         ],
-#                     }
-#                     for r in rooms
-#                 ]
-#             })
-
-#         # 🔹 Normal users: only their rooms
-#         rooms = ChatRoom.objects.filter(
-#             participants__user=request.user,
-#             user_states__user=request.user,
-#             user_states__is_deleted=False
-#         ).distinct().prefetch_related(
-#             "participants__user"
-#         ).order_by("-id")[:200]
-
-#         # 🔹 Get last message per room
-#         last_map = (
-#             Message.objects
-#             .filter(room__in=rooms)
-#             .values("room_id")
-#             .annotate(last_id=Max("id"))
-#         )
-#         last_by_room = {x["room_id"]: x["last_id"] for x in last_map}
-
-#         # 🔹 User states
-#         states = {
-#             s.room_id: s
-#             for s in RoomUserState.objects.filter(room__in=rooms, user=request.user)
-#         }
-
-#         out = []
-#         for r in rooms:
-#             last_id = last_by_room.get(r.id)
-#             state = states.get(r.id)
-#             last_read = state.last_read_message_id if state else None
-
-#             unread = bool(last_id and (last_read is None or last_id > last_read))
-
-#             out.append({
-#                 "room_id": r.id,
-#                 "type": r.room_type,
-#                 "clinic_id": r.clinic_id,
-#                 "name": r.name,
-#                 "unread": unread,
-#                 "member_count": r.participants.count(),
-#                 "members": [
-#                     {
-#                         "id": p.user.id,
-#                         "name": f"{p.user.first_name} {p.user.last_name}".strip(),
-#                         "role": p.user.role,
-#                     }
-#                     for p in r.participants.all()
-#                 ],
-#             })
-
-#         return Response({
-#             "read_only": False,
-#             "results": out
-#         })
 
 
 # ---- CREATE PRIVATE ----
@@ -639,7 +557,25 @@ class MessageListView(APIView):
                     qs, many=True, context={"request": request}
                 ).data
             })
+        
+        if not RoomUserState.objects.filter(
+            room_id=room_id,
+            user=request.user,
+            # is_deleted=False,
+            is_blocked=False   #
+        ).exists():
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "ROOM_BLOCKED",
+                        "message": "You no longer have access to this group"
+                    }
+                },
+                status=403
+    )
 
+        
         if not ensure_room_access(request.user, room_id):
             return Response(status=404)
 
@@ -670,17 +606,23 @@ class MessageListView(APIView):
                     "me" if block.blocker_id == request.user.id else "other"
                 )
                 can_unblock = block.blocker_id == request.user.id
+        pref = UserChatHistoryPreference.objects.filter(
+            user=request.user,
+            room_id=room_id
+        ).first()
 
-        # 🔹 Fetch messages FIRST
+        qs = Message.objects.filter(room_id=room_id)
+
+        if pref:
+            qs = qs.filter(created_at__gt=pref.hide_history_before)
+
         qs = (
-            Message.objects
-            .filter(room_id=room_id)
-            .select_related("sender")
-            .prefetch_related("attachments", "reactions")
-            .order_by("-id")[:50]
+            qs.select_related("sender")
+              .prefetch_related("attachments", "reactions")
+              .order_by("-id")[:50]
         )
 
-        # 🔹 Mark as read HERE (safe)
+        # 5️⃣ Mark read safely
         last_message_id = qs[0].id if qs else None
         if last_message_id:
             mark_room_read_and_clear_mentions(
@@ -699,6 +641,34 @@ class MessageListView(APIView):
                 qs, many=True, context={"request": request}
             ).data
         })
+        # 🔹 Fetch messages FIRST
+        # qs = (
+        #     Message.objects
+        #     .filter(room_id=room_id)
+        #     .select_related("sender")
+        #     .prefetch_related("attachments", "reactions")
+        #     .order_by("-id")[:50]
+        # )
+
+        # # 🔹 Mark as read HERE (safe)
+        # last_message_id = qs[0].id if qs else None
+        # if last_message_id:
+        #     mark_room_read_and_clear_mentions(
+        #         room_id=room_id,
+        #         user=request.user,
+        #         last_message_id=last_message_id
+        #     )
+
+        # return Response({
+        #     "read_only": False,
+        #     "chat_blocked": chat_blocked,
+        #     "blocked_by": blocked_by,
+        #     "blocked_at": blocked_at,
+        #     "can_unblock": can_unblock,
+        #     "results": MessageSerializer(
+        #         qs, many=True, context={"request": request}
+        #     ).data
+        # })
 
 
 
@@ -761,6 +731,26 @@ class SendMessageView(APIView):
                     },
                     status=403
                 )
+                # 🚫 GROUP BLOCK CHECK
+        if room.room_type == "group":
+            state = RoomUserState.objects.filter(
+                room=room,
+                user=effective_user,
+                is_blocked=False
+            ).first()
+
+            if state and state.is_blocked:
+                return Response(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "GROUP_BLOCKED",
+                            "message": "You are blocked from sending messages in this group"
+                        }
+                    },
+                    status=403
+                )
+
 
         content = (request.data.get("content") or "").strip()
         files = request.FILES.getlist("attachments")
@@ -812,7 +802,9 @@ class SendMessageView(APIView):
 
 
         return Response({
+                "success":True,
                 "message_id": msg.id,
+                "message_body": msg.content,
                 "impersonated": is_impersonating
             }, status=201)
 #-----Direct Message send View ------
@@ -969,7 +961,9 @@ class ReactMessageView(APIView):
                 clinic_id=msg.room.clinic_id,
             )
 
-        return Response({"reaction": reaction})
+        return Response({"success":True,
+            "message": "successfully reacted",
+            "reaction": reaction})
 
 # ---- BLOCK USER ----
 # class BlockUserView(APIView):
@@ -1020,32 +1014,41 @@ class ReactMessageView(APIView):
 
 class BlockUnblockUserView(APIView):
     permission_classes = [IsAuthenticated]
+    def error(self, code, message):
+        return {
+            "success": False,
+            "error": {
+                "code": code,
+                "message": message
+            }
+        }
+    
 
     def post(self, request):
         if has_permission(request.user, "chat:view_all_history"):
-            return Response({"detail": "Read-only access"}, status=403)
+            return Response(
+                self.error("READ_ONLY", "Read-only access"),
+                status=403
+            )
 
         if not has_permission(request.user, "chat:block_user"):
-            return Response({"detail": "Forbidden"}, status=403)
-
-        user_id = request.data.get("user_id")
-        action = request.data.get("action")
-
-        if not user_id or action not in ("block", "unblock"):
             return Response(
-                {"detail": "user_id and valid action required"},
+                self.error("FORBIDDEN", "You do not have permission"),
+                status=403
+            )
+
+        serializer = BlockUnblockUserSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        target_id = serializer.validated_data["user_id"]
+        action = serializer.validated_data["action"]
+
+        if target_id == request.user.id:
+            return Response(
+                self.error("INVALID_ACTION", "You cannot block yourself"),
                 status=400
             )
 
-        if int(user_id) == request.user.id:
-            return Response(
-                {"detail": "You cannot block yourself"},
-                status=400
-            )
-
-        target_id = int(user_id)
-
-        # 🔒 Check reverse block
         reverse_block = UserBlock.objects.filter(
             blocker_id=target_id,
             blocked=request.user
@@ -1054,13 +1057,11 @@ class BlockUnblockUserView(APIView):
         if action == "block":
             if reverse_block:
                 return Response(
-                    {
-                        "detail": (
-                            "You are blocked by this user since "
-                            f"{reverse_block.blocked_at}"
-                        )
-                    },
-                    status=status.HTTP_403_FORBIDDEN
+                    self.error(
+                        "BLOCKED_BY_OTHER",
+                        f"You are blocked since {reverse_block.blocked_at}"
+                    ),
+                    status=403
                 )
 
             UserBlock.objects.get_or_create(
@@ -1069,7 +1070,7 @@ class BlockUnblockUserView(APIView):
                 defaults={"blocked_at": timezone.now()},
             )
 
-        else:  # unblock
+        else:
             deleted, _ = UserBlock.objects.filter(
                 blocker=request.user,
                 blocked_id=target_id
@@ -1077,30 +1078,398 @@ class BlockUnblockUserView(APIView):
 
             if deleted == 0:
                 return Response(
-                    {"detail": "User is not blocked by you"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    self.error(
+                        "NOT_BLOCKED",
+                        "User is not blocked by you"
+                    ),
+                    status=400
                 )
 
-        return Response({"success": True, "action": action})
+        return Response({
+            "success": True,
+            "action": action,
+            "user_id": target_id
+        })
 
 
 
-# ---- SOFT DELETE CHAT (per-user) ----
+# ---- SOFT DELETE CHAT  ----
 class SoftDeleteChatView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, room_id):
-        if has_permission(request.user, "chat:view_all_history"):
-            return Response({"detail":"Read-only access"}, status=403)
-
         if not has_permission(request.user, "chat:delete_chat"):
-            return Response({"detail":"Forbidden"}, status=403)
+            return Response({"detail": "Forbidden"}, status=403)
 
-        if not ChatParticipant.objects.filter(room_id=room_id, user=request.user).exists():
+        if not ChatParticipant.objects.filter(
+            room_id=room_id,
+            user=request.user
+        ).exists():
             return Response(status=404)
 
-        st, _ = RoomUserState.objects.get_or_create(room_id=room_id, user=request.user)
-        st.is_deleted = True
-        st.deleted_at = timezone.now()
-        st.save(update_fields=["is_deleted","deleted_at"])
+        #  hide everything BEFORE now
+        UserChatHistoryPreference.objects.update_or_create(
+            user=request.user,
+            room_id=room_id,
+            defaults={
+                "hide_history_before": timezone.now()
+            }
+        )
+
+        # reset state
+        RoomUserState.objects.update_or_create(
+            room_id=room_id,
+            user=request.user,
+            defaults={
+                "is_deleted": True,
+                "deleted_at": timezone.now(),
+                "last_read_message_id": None
+            }
+        )
+
+        return Response({"success": True})
+
+
+
+
+# add members
+class AddGroupMembersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id):
+        if not (
+            request.user.role == "owner" or
+            has_permission(request.user, "chat:manage_group")
+        ):
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "You do not have permission to add members"
+                    }
+                },
+                status=403
+            )
+
+        room = ChatRoom.objects.filter(id=room_id, room_type="group").first()
+        if not room:
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Group not found"
+                    }
+                },
+                status=404
+            )
+
+        if not ChatParticipant.objects.filter(room=room, user=request.user).exists():
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "NOT_MEMBER",
+                        "message": "You are not a member of this group"
+                    }
+                },
+                status=403
+            )
+
+        serializer = AddGroupMembersSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user_ids = serializer.validated_data["user_ids"]
+
+        users = User.objects.filter(
+            id__in=user_ids,
+            is_active=True,
+            is_deleted=False,
+            is_blocked=False
+        )
+        if users.count() != len(user_ids):
+            return Response(
+            {
+                "success": False,
+                "error": {
+                    "code": "USER_NOT_FOUND",
+                    "message": "One or more selected users do not exist"
+                }
+            },
+            status=400
+        )
+
+        # if room.clinic_id:
+        #     users = users.filter(
+        #         clinicuser__clinic_id=room.clinic_id
+        #     )
+        if room.clinic_id:
+            clinic_count = ClinicUser.objects.filter(
+            clinic_id=room.clinic_id,
+            user_id__in=user_ids
+            ).count()
+
+            if clinic_count != len(user_ids):
+                return Response(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "USER_NOT_IN_CLINIC",
+                            "message": "One or more selected users are not in this clinic"
+                        }
+                    },
+                    status=400
+                )
+                
+
+        existing_ids = set(
+            ChatParticipant.objects.filter(
+                room=room,
+                user_id__in=user_ids
+            ).values_list("user_id", flat=True)
+        )
+        if existing_ids :
+            return Response(
+            {
+                "success": False,
+                "error": {
+                    "code": "USER_ALREADY_MEMBER",
+                    "message": "One or more selected users are already members"
+                }
+            },
+            status=400
+        )
+           
+        to_add = [u for u in users if u.id not in existing_ids]
+
+        if not to_add:
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "USER_ALREADY_MEMBER",
+                        "message": "Selected users are already members of this group"
+                    }
+                },
+                status=400
+            )
+
+        ChatParticipant.objects.bulk_create(
+            [ChatParticipant(room=room, user=u) for u in to_add],
+            ignore_conflicts=True
+        )
+
+        RoomUserState.objects.bulk_create(
+            [RoomUserState(room=room, user=u) for u in to_add],
+            ignore_conflicts=True
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "added": len(to_add),
+                    "skipped": list(existing_ids),
+                    "room_id": room.id
+                }
+            },
+            status=201
+        )
+
+
+#room members view
+class ChatRoomMembersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        room = ChatRoom.objects.filter(id=room_id).first()
+        if not room:
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Chat room not found"
+                    }
+                },
+                status=404
+            )
+
+        is_participant = ChatParticipant.objects.filter(
+            room=room,
+            user=request.user
+        ).exists()
+
+        # Owner / audit users can view without being participant
+        if not is_participant and not has_permission(
+            request.user, "chat:view_all_history"
+        ):
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "You do not have access to this chat"
+                    }
+                },
+                status=403
+            )
+
+        participants = (
+            ChatParticipant.objects
+            .filter(room=room)
+            .select_related("user")
+            .order_by("user__first_name", "user__last_name")
+        )
+
+        results = []
+        for p in participants:
+            user = p.user
+            results.append({
+                "id": user.id,
+                "name": (
+                    f"{user.first_name} {user.last_name}".strip()
+                    or user.email
+                ),
+                "email": user.email,
+                "role": user.role,
+                "is_owner": user.role == "owner"
+            })
+
+        return Response(
+            {
+                "success": True,
+                "room_id": room.id,
+                "room_type": room.room_type,
+                "clinic_id": room.clinic_id if room.room_type == "group" else None,
+                "count": len(results),
+                "results": results
+            },
+            status=200
+        )
+
+
+
+#block from group
+class BlockGroupMemberView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id):
+        if not (
+            request.user.role == "owner" or
+            has_permission(request.user, "chat:manage_group")
+        ):
+            return Response({
+                "success": False,
+                "message": "Permission denied",
+                "data": None,
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to manage this group"
+                }
+            }, status=403)
+
+        serializer = BlockGroupMemberSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": "Invalid request",
+                "data": None,
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": serializer.errors
+                }
+            }, status=400)
+
+        user_id = serializer.validated_data["user_id"]
+
+        if user_id == request.user.id:
+            return Response({
+                "success": False,
+                "message": "Invalid action",
+                "data": None,
+                "error": {
+                    "code": "INVALID_ACTION",
+                    "message": "You cannot block yourself"
+                }
+            }, status=400)
+
+        state = RoomUserState.objects.filter(
+            room_id=room_id,
+            user_id=user_id
+        ).first()
+
+        if not state:
+            return Response({
+                "success": False,
+                "message": "User not found",
+                "data": None,
+                "error": {
+                    "code": "NOT_MEMBER",
+                    "message": "User is not a member of this group"
+                }
+            }, status=404)
+
+        if state.is_blocked:
+            return Response({
+                "success": False,
+                "message": "Already blocked",
+                "data": None,
+                "error": {
+                    "code": "ALREADY_BLOCKED",
+                    "message": "User is already blocked"
+                }
+            }, status=400)
+
+        state.is_blocked = True
+        state.save(update_fields=["is_blocked"])
+
+        return Response({
+            "success": True,
+            "message": "User blocked successfully",
+            "data": {
+                "room_id": room_id,
+                "user_id": user_id,
+                "is_blocked": True
+            },
+            "error": None
+        }, status=200)
+
+
+
+#delete chat history
+class SoftDeleteChatView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id):
+        if not has_permission(request.user, "chat:delete_chat"):
+            return Response({"detail": "Forbidden"}, status=403)
+
+        if not ChatParticipant.objects.filter(
+            room_id=room_id,
+            user=request.user
+        ).exists():
+            return Response(status=404)
+
+        # hide everything BEFORE now
+        UserChatHistoryPreference.objects.update_or_create(
+            user=request.user,
+            room_id=room_id,
+            defaults={
+                "hide_history_before": timezone.now()
+            }
+        )
+
+        # reset state
+        RoomUserState.objects.update_or_create(
+            room_id=room_id,
+            user=request.user,
+            defaults={
+                "is_deleted": True,
+                "deleted_at": timezone.now(),
+                "last_read_message_id": None
+            }
+        )
+
         return Response({"success": True})

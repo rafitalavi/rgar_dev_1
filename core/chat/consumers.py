@@ -2,45 +2,23 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 
-from chat.models import ChatParticipant, Message
-from chat.services_messages import mark_room_read
+from chat.models import RoomUserState, Message
+from chat.services_messages import mark_room_read_and_clear_mentions
 
 
 @database_sync_to_async
 def can_user_connect(user, room_id):
-    return ChatParticipant.objects.filter(
+    return RoomUserState.objects.filter(
         room_id=room_id,
-        user=user
+        user=user,
+        is_blocked=False,   
     ).exists()
 
 
 @database_sync_to_async
-def mark_room_read_on_connect(room_id, user):
+def mark_room_read_on_delivery(room_id, user):
     last_message_id = (
-        Message.objects
-        .filter(room_id=room_id)
-        .order_by("-id")
-        .values_list("id", flat=True)
-        .first()
-    )
-
-    if last_message_id:
-        return mark_room_read(
-            room_id=room_id,
-            user=user,
-            last_message_id=last_message_id
-        )
-
-    return False
-
-@database_sync_to_async
-def mark_room_read_on_connect(room_id: int, user):
-    from chat.models import Message
-    from chat.services_messages import mark_room_read_and_clear_mentions
-
-    last_message_id = (
-        Message.objects
-        .filter(room_id=room_id)
+        Message.objects.filter(room_id=room_id)
         .order_by("-id")
         .values_list("id", flat=True)
         .first()
@@ -50,11 +28,11 @@ def mark_room_read_on_connect(room_id: int, user):
         mark_room_read_and_clear_mentions(
             room_id=room_id,
             user=user,
-            last_message_id=last_message_id
+            last_message_id=last_message_id,
         )
 
-class ChatRoomConsumer(AsyncJsonWebsocketConsumer):
 
+class ChatRoomConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         user = self.scope.get("user")
 
@@ -70,24 +48,26 @@ class ChatRoomConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4403)
             return
 
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
+        await self.channel_layer.group_add(
+            self.group_name,
+            self.channel_name,
+        )
 
-        # ⚠️ DO NOT mark read here
+        await self.accept()
         self._marked_read = False
 
-        await self.send_json({
-            "type": "connected",
-            "room_id": self.room_id
-        })
-
-   
+        await self.send_json(
+            {
+                "type": "connected",
+                "room_id": self.room_id,
+            }
+        )
 
     async def disconnect(self, close_code):
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(
                 self.group_name,
-                self.channel_name
+                self.channel_name,
             )
 
     async def receive_json(self, data):
@@ -97,37 +77,28 @@ class ChatRoomConsumer(AsyncJsonWebsocketConsumer):
                 {
                     "type": "typing_event",
                     "user_id": self.scope["user"].id,
-                }
+                },
             )
 
-    # async def message_event(self, event):
-    #     await self.send_json({
-    #         "type": "message",
-    #         "data": event["message"],
-    #     })
     async def message_event(self, event):
-        # 🔹 deliver message
-        await self.send_json({
-            "type": "message",
-            "data": event["message"],
-        })
+        await self.send_json(
+            {
+                "type": "message",
+                "data": event["message"],
+            }
+        )
 
-        # ✅ WhatsApp-style: mark read ONLY when message delivered
         if not self._marked_read:
             self._marked_read = True
-            await mark_room_read_on_connect(
+            await mark_room_read_on_delivery(
                 self.room_id,
-                self.scope["user"]
+                self.scope["user"],
             )
 
     async def typing_event(self, event):
-        await self.send_json({
-            "type": "typing",
-            "user_id": event["user_id"],
-        })
-
-    async def read_event(self, event):
-        await self.send_json({
-            "type": "read",
-            "user_id": event["user_id"],
-        })
+        await self.send_json(
+            {
+                "type": "typing",
+                "user_id": event["user_id"],
+            }
+        )

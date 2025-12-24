@@ -129,3 +129,44 @@ class DirectMessageCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("One or more users are invalid")
 
         return values
+
+#add member
+class AddGroupMembersSerializer(serializers.Serializer):
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+
+    def validate_user_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError(
+                "Duplicate user IDs are not allowed"
+            )
+        return value
+    
+    
+# block members
+class BlockGroupMemberSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+
+    def validate_user_id(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Invalid user id")
+        return value
+
+#block user
+# chat
+class BlockUnblockUserSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    action = serializers.ChoiceField(choices=["block", "unblock"])
+
+    def validate_user_id(self, value):
+        from accounts.models import User
+
+        if not User.objects.filter(
+            id=value,
+            is_active=True,
+            is_deleted=False
+        ).exists():
+            raise serializers.ValidationError("User not found")
+        return value

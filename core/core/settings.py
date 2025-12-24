@@ -45,7 +45,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
      "corsheaders",
     "rest_framework",
-
+     "assessments",
     "accounts",
     "medical",
     "permissions_app",

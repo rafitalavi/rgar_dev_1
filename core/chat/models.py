@@ -81,7 +81,7 @@ class ChatParticipant(models.Model):
 class RoomUserState(models.Model):
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name="user_states")
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-
+    is_blocked = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
     last_read_message_id = models.BigIntegerField(null=True, blank=True)
@@ -163,3 +163,17 @@ class AiFeedback(models.Model):
     clinic_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    
+    
+class UserChatHistoryPreference(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE)
+    hide_history_before = models.DateTimeField()
+
+    class Meta:
+        unique_together = ("user", "room")
+        indexes = [
+            models.Index(fields=["user", "room"]),
+            models.Index(fields=["room", "hide_history_before"]),
+        ]
