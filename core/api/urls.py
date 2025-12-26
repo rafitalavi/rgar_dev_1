@@ -14,6 +14,7 @@ from chat.views import (
 from permissions_app.views import ToggleUserPermissionView ,UserPermissionsView
 from chat.views_user_history import *
 from notifications.views import *
+from assessments.views import CreateAssessmentView , AssessmentQuestionsView , AddQuestionView ,DeleteQuestionView
 
 urlpatterns = [
     path("login/", LoginView.as_view()),
@@ -78,6 +79,15 @@ urlpatterns = [
     
     path("notifications/", NotificationListView.as_view()),
     path("notifications/<int:notif_id>/seen/", NotificationMarkSeenView.as_view()),
+    
+    
+    
+    path("assesments/create", CreateAssessmentView.as_view()),
+    path("assessments/<int:assessment_id>/questions", AssessmentQuestionsView.as_view()),
+    path("assessments/<int:assessment_id>/questions-add", AddQuestionView.as_view()),
+    path("assessments/questions-del/<int:pk>/", DeleteQuestionView.as_view()),
+    
+    
     
 ]
 

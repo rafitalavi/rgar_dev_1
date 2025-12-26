@@ -37,6 +37,12 @@ PERMS = [
     # Notification Permissions
     ("notif:view", "View notifications"),
     ("notif:mark_seen", "Mark notifications as seen"),
+    #assesments 
+    ("assessment:create" , "Assesments Create"),
+    ("assessment:view_all" , "Assesments Qeustionview"),
+    ("assessment:update" , "Assesments update"),
+    
+    
 ]
 
 ROLE_MATRIX = {
@@ -45,13 +51,15 @@ ROLE_MATRIX = {
     "president": [
         "listUser:view",
         "user:create","user:view","user:update",
-        "clinic:create","clinic:view","clinic:update",
+        "clinic:view","clinic:update",
         "chat:create_group","chat:create_private",
         "chat:send","chat:block_user","chat:use_ai",
         "chat:delete_chat","chat:ai_group_autoreply",
-        "chat:react_dislike",
-        "notif:view","notif:mark_seen",
-        "chat:view_all_history",
+        "chat:react_dislike","chat:block_user",
+        "notif:view","notif:mark_seen","chat:impersonate",
+        "chat:view_all_history","chat:view_all_users",
+        "assessment:create","assessment:view_all",
+        "assessment:update", 
     ],
 
     "manager": [

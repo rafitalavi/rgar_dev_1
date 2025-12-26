@@ -20,6 +20,7 @@ class Assessment(models.Model):
     clinic = models.ForeignKey(Clinic, on_delete=models.CASCADE, related_name="assessments")
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
+    role = models.CharField(max_length=255 ,blank=True ,null =True)
 
     start_date = models.DateTimeField(default=timezone.now)
     end_date = models.DateTimeField()
@@ -121,9 +122,12 @@ class Score(models.Model):
         unique_together = ("user", "assessment")
 
 
-# class Notification(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     title = models.CharField(max_length=255)
-#     message = models.TextField()
-#     is_read = models.BooleanField(default=False)
-#     created_at = models.DateTimeField(auto_now_add=True)
+class AssesmentNotification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="assessment_notifications")
+    assessment = models.ForeignKey(
+        Assessment, on_delete=models.CASCADE, null=True, blank=True
+    )
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)

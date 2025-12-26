@@ -54,20 +54,31 @@ def send_ai_message(
 
 # chat/services_ai.py
 
-def get_reply(user_message: str) -> str:
+def get_reply(user_message: str | None, *, has_attachments: bool = False) -> str:
     """
     Temporary AI logic.
     Replace later with OpenAI / LLM.
     """
 
-    text = user_message.lower().strip()
+    text = (user_message or "").lower().strip()
 
+    # CASE 1: FILE-ONLY MESSAGE
+    if not text and has_attachments:
+        return "I’ve received the file 📎. What would you like me to do with it?"
+
+    # CASE 2: Greeting
     if text in ("hi", "hello", "hey"):
         return "Hello 👋 How can I help you today?"
 
+    # ✅ CASE 3: Asking for help
     if "help" in text:
         return "Sure 🙂 Tell me what you need help with."
 
+    # ✅ CASE 4: Empty message, no file
+    if not text:
+        return ""
+
+    # ✅ CASE 5: Default
     return "I’m here 🤖 Please tell me more."
 
 

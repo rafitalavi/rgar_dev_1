@@ -85,28 +85,20 @@ class RoomListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # 🔹 Rooms where user is a participant (NORMAL MODE)
-        participant_rooms = ChatRoom.objects.filter(
-        participants__user=request.user,
-        user_states__user=request.user,
-        user_states__is_blocked=False,
-    ).distinct().prefetch_related(
-        "participants__user"
-    ).order_by("-id")[:200]
+        rooms = ChatRoom.objects.filter(
+            participants__user=request.user,
+            user_states__user=request.user,
+            user_states__is_blocked=False,
+        ).distinct().prefetch_related(
+            "participants__user"
+        ).order_by("-id")[:200]
 
-
-        if participant_rooms.exists():
-            rooms = participant_rooms
-            read_only = False
-        else:
-            # 🔹 Audit-only rooms (OWNER / special roles)
-            if not has_permission(request.user, "chat:view_all_history"):
-                return Response({"detail": "Forbidden"}, status=403)
-
-            rooms = ChatRoom.objects.prefetch_related(
-                "participants__user"
-            ).order_by("-id")[:200]
-            read_only = True
+        # 🔒 STRICT RULE: not a member → see nothing
+        if not rooms.exists():
+            return Response({
+                "read_only": False,
+                "results": []
+            })
 
         # 🔹 Last messages
         last_map = (
@@ -126,15 +118,20 @@ class RoomListView(APIView):
             }
             for x in last_map
         }
+
         last_sender_by_room = {
-        m.room_id: m.sender_id
-        for m in Message.objects.filter(
-            id__in=[x["last_id"] for x in last_map]
-        )
-    }
+            m.room_id: m.sender_id
+            for m in Message.objects.filter(
+                id__in=[x["last_id"] for x in last_map]
+            )
+        }
+
         states = {
             s.room_id: s
-            for s in RoomUserState.objects.filter(room__in=rooms, user=request.user)
+            for s in RoomUserState.objects.filter(
+                room__in=rooms,
+                user=request.user
+            )
         }
 
         out = []
@@ -147,13 +144,13 @@ class RoomListView(APIView):
             last_read = state.last_read_message_id if state else None
 
             unread = bool(
-    not read_only and
-    last_id and
-    last_sender_id != request.user.id and  # ✅ KEY FIX
-    (last_read is None or last_id > last_read)
-)
+                last_id and
+                last_sender_id != request.user.id and
+                (last_read is None or last_id > last_read)
+            )
+
             out.append({
-                  "last_message_at": last_message_at,
+                "last_message_at": last_message_at,
                 "room_id": r.id,
                 "type": r.room_type,
                 "clinic_id": r.clinic_id,
@@ -172,10 +169,9 @@ class RoomListView(APIView):
             })
 
         return Response({
-            "read_only": read_only,
+            "read_only": False,
             "results": out
         })
-
 
 
 
@@ -534,21 +530,7 @@ class CreateClinicGroupView(APIView):
 
 
 
-# ---- MESSAGES LIST ----
-# class MessageListView(APIView):
-#     permission_classes = [IsAuthenticated]
 
-#     def get(self, request, room_id):
-#         # owner/history viewer can read any room
-#         if has_permission(request.user, "chat:view_all_history"):
-#             qs = Message.objects.filter(room_id=room_id).select_related("sender").prefetch_related("attachments","reactions").order_by("-id")[:50]
-#             return Response({"read_only": True, "results": MessageSerializer(qs, many=True, context={"request": request}).data})
-
-#         if not ensure_room_access(request.user, room_id):
-#             return Response(status=404)
-
-#         qs = Message.objects.filter(room_id=room_id).select_related("sender").prefetch_related("attachments","reactions").order_by("-id")[:50]
-#         return Response({"read_only": False, "results": MessageSerializer(qs, many=True, context={"request": request}).data})
 
 
 
@@ -700,6 +682,7 @@ class SendMessageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, room_id):
+        ai_reply = None 
         try:
             effective_user, is_impersonating = get_effective_user(request)
         except PermissionError as e:
@@ -796,6 +779,7 @@ class SendMessageView(APIView):
                 file=f,
                 attachment_type=attachment_type
             )
+        has_attachments = bool(files)
 
         # AI group auto-reply (only if real human message)
         # if room.room_type == "group" and not is_impersonating and has_permission(request.user, "chat:ai_group_autoreply"):
@@ -812,17 +796,20 @@ class SendMessageView(APIView):
                 )
       # REAL-TIME BROADCAST (THIS WAS MISSING)
         if room.room_type == "ai" and not is_impersonating:
-            
+            ai_reply = get_reply(
+            content,
+            has_attachments=has_attachments
+        )
 
-            ai_reply = get_reply(content)
-
+        if ai_reply:  # empty string is ignored
             send_ai_message(
                 room=room,
                 content=ai_reply
             )
 
+
         # =========================
-        # 🔴REAL-TIME BROADCAST
+        # REAL-TIME BROADCAST
         # =========================
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -847,6 +834,7 @@ class SendDirectMessageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        
         if not has_permission(request.user, "chat:create_private"):
             return Response(
                 {
@@ -998,7 +986,7 @@ class ReactMessageView(APIView):
                 existing.reaction = reaction
                 existing.save(update_fields=["reaction"])
 
-        # 🔴 REAL-TIME BROADCAST
+        #  REAL-TIME BROADCAST
         from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
 
@@ -1739,12 +1727,12 @@ class ClinicReactionListView(APIView):
     def get(self, request):
         reaction_type = request.GET.get("reaction")  # like | dislike | None
 
-        # 🔹 Clinics user belongs to
+        #  Clinics user belongs to
         clinic_ids = ClinicUser.objects.filter(
             user=request.user
         ).values_list("clinic_id", flat=True)
 
-        # 🔹 Base queryset
+        #  Base queryset
         qs = MessageReaction.objects.filter(
             message__room__clinic_id__in=clinic_ids
         ).select_related(
@@ -1753,7 +1741,7 @@ class ClinicReactionListView(APIView):
             "user"
         ).order_by("-created_at")
 
-        # 🔹 Optional filter
+        #  Optional filter
         if reaction_type in ("like", "dislike"):
             qs = qs.filter(reaction=reaction_type)
 
