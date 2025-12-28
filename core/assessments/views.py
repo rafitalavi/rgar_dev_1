@@ -15,11 +15,12 @@ from .serializers import (
     AssessmentSerializer,
     QuestionSerializer,
     AnswerSerializer,
-    NotificationSerializer
+    NotificationSerializer,
+    CreatorAssessmentHistorySerializer
 )
 from django.db import transaction
 from .utils import flatten_serializer_errors, ok, err
-from .services_ai_assesment import generate_questions_for_assessment
+from .services_ai_assesment import generate_questions_for_assessment , score_assessment_answers
 
 def is_creator(user, assessment):
     return assessment.created_by_id == user.id
@@ -49,11 +50,10 @@ class CreateAssessmentView(APIView):
 
         data = request.data.copy()
 
-        # remove non-model fields
         data.pop("count", None)
         data.pop("created_by", None)
 
-        # default end_date = now + 7 days
+        
         if not data.get("end_date"):
             data["end_date"] = timezone.now() + timedelta(days=7)
 
@@ -67,10 +67,10 @@ class CreateAssessmentView(APIView):
         with transaction.atomic():
             assessment = serializer.save(
                 status="draft",
-                created_by=request.user,  # ✅ FIX
+                created_by=request.user, 
             )
 
-            # 🔥 GENERATE QUESTIONS IF COUNT PROVIDED
+        
             if count is not None:
                 try:
                     count = int(count)
@@ -203,17 +203,23 @@ class UpdateAssessmentStatusView(APIView):
             return err("Forbidden", status_code=403)
 
         assessment = get_object_or_404(Assessment, id=assessment_id)
+
+        # creator OR owner OR privileged
+        if not (
+            assessment.created_by_id == request.user.id
+            or request.user.role == "owner"
+        ):
+            return err("Forbidden", status_code=403)
+
         status_value = request.data.get("status")
 
         if status_value not in ["active", "paused", "closed"]:
             return err("Invalid status")
 
-        if status_value == "active" and not assessment.role:
-            return err("Role must be set before starting assessment")
-
         assessment.status = status_value
-        assessment.save()
+        assessment.save(update_fields=["status"])
 
+        # Assign users only when activating
         if status_value == "active":
             clinic_users = ClinicUser.objects.filter(
                 clinic=assessment.clinic,
@@ -236,14 +242,66 @@ class UpdateAssessmentStatusView(APIView):
 
         return ok(f"Assessment marked as {status_value}")
 
+from django.utils.dateparse import parse_date
+from django.utils import timezone
+from datetime import time
+
+class UpdateAssessmentEndDateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, assessment_id):
+        if not has_permission(request.user, "assessment:update"):
+            return err("Forbidden", status_code=403)
+
+        assessment = get_object_or_404(Assessment, id=assessment_id)
+
+        # creator OR owner
+        if not (
+            assessment.created_by_id == request.user.id
+            or request.user.role == "owner"
+        ):
+            return err("Forbidden", status_code=403)
+
+        end_date_str = request.data.get("end_date")
+        if not end_date_str:
+            return err("end_date is required (YYYY-MM-DD)")
+
+       
+        parsed_date = parse_date(end_date_str)
+        if not parsed_date:
+            return err("Invalid date format. Use YYYY-MM-DD")
+
+       
+        end_datetime = timezone.make_aware(
+            timezone.datetime.combine(parsed_date, time(23, 59, 59))
+        )
+
+        if end_datetime <= timezone.now():
+            return err("end_date must be in the future")
+
+        assessment.end_date = end_datetime
+        assessment.save(update_fields=["end_date"])
+
+        return ok(
+            "Assessment end date updated",
+            {
+                "assessment_id": assessment.id,
+                "end_date": assessment.end_date.date(),  # return date only
+            },
+        )
+
+
 class MyAssessmentsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         assessments = Assessment.objects.filter(
-            userassessment__user=request.user,
-            status="active",
-        ).distinct()
+        userassessment__user=request.user,
+        status="active",
+    ).exclude(
+        userassessment__status="completed"
+    ).distinct()
+
 
         return ok(
             "My active assessments fetched",
@@ -251,48 +309,72 @@ class MyAssessmentsView(APIView):
         )
 
 
-class SubmitAnswerView(APIView):
+
+        
+
+
+class CandidateAssessmentQuestionsView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, question_id):
-        question = get_object_or_404(Question, id=question_id)
-        assessment = question.assessment
+    def get(self, request, assessment_id):
+        assessment = get_object_or_404(Assessment, id=assessment_id)
 
+      
         if assessment.status != "active":
-            return err("Assessment is not active")
+            return err("Assessment is not active", status_code=403)
+        
 
+       
+        if timezone.now() > assessment.end_date:
+            return err("Assessment deadline has passed", status_code=403)
+
+        
         if not UserAssessment.objects.filter(
-            user=request.user,
-            assessment=assessment
+            assessment=assessment,
+            user=request.user
         ).exists():
-            return err("Forbidden", status_code=403)
+            return err("You are not assigned to this assessment", status_code=403)
 
-        serializer = AnswerSerializer(data=request.data)
-        if not serializer.is_valid():
-            msgs = flatten_serializer_errors(serializer.errors)
-            return err(msgs[0], serializer.errors)
+        questions = Question.objects.filter(
+            assessment=assessment
+        ).order_by("number")
 
-        Answer.objects.update_or_create(
-            user=request.user,
-            question=question,
-            defaults={"answer_text": serializer.validated_data["answer_text"]},
+        return ok(
+            "Questions fetched",
+            {
+                "assessment": {
+                    "id": assessment.id,
+                    "title": assessment.title,
+                    "end_date": assessment.end_date.date(),
+                },
+                "questions": [
+                    {
+                        "id": q.id,
+                        "number": q.number,
+                        "text": q.text,
+                    }
+                    for q in questions
+                ],
+            },
         )
 
-        return ok("Answer submitted", None, 201)
 
-
-class SubmitAssessmentView(APIView):
+class SubmitAssessmentUnifiedView(APIView):
     permission_classes = [IsAuthenticated]
+
+    QUESTIONS_MAX_SCORE = 10
 
     def post(self, request, assessment_id):
         assessment = get_object_or_404(Assessment, id=assessment_id)
 
+        # 🔒 must be active
         if assessment.status != "active":
             return err("Assessment is not active")
 
+        # 👤 must be assigned
         ua = UserAssessment.objects.filter(
-            user=request.user,
-            assessment=assessment
+            assessment=assessment,
+            user=request.user
         ).first()
 
         if not ua:
@@ -301,99 +383,93 @@ class SubmitAssessmentView(APIView):
         if ua.status == "completed":
             return err("Assessment already submitted")
 
-        ua.status = "completed"
-        ua.submitted_at = timezone.now()
-        ua.save(update_fields=["status", "submitted_at"])
-
-        return ok(
-            "Assessment submitted successfully",
-            {"submitted_at": ua.submitted_at},
-            status_code=200,
+        #  deadline handling
+        submitted_at = (
+            assessment.end_date
+            if timezone.now() > assessment.end_date
+            else timezone.now()
         )
 
+        #  SAVE ANSWERS (optional)
+        answers_payload = request.data.get("answers", [])
 
-class MyNotificationsView(APIView):
-    permission_classes = [IsAuthenticated]
+        for item in answers_payload:
+            question_id = item.get("question_id")
+            answer_text = item.get("answer_text")
 
-    def get(self, request):
-        qs = AssesmentNotification.objects.filter(
-            user=request.user
-        ).order_by("-created_at")
-
-        return ok(
-            "Notifications fetched",
-            NotificationSerializer(qs, many=True).data,
-        )
-
-
-
-class AIScoreAssessmentView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, assessment_id):
-        if not has_permission(request.user, "assessment:score"):
-            return err("Forbidden", status_code=403)
-
-        assessment = get_object_or_404(Assessment, id=assessment_id)
-
-        completed_users = UserAssessment.objects.filter(
-            assessment=assessment,
-            status="completed"
-        ).select_related("user")
-
-        results = []
-
-        QUESTIONS_MAX_SCORE = 10  # per question
-
-        for ua in completed_users:
-            user = ua.user
-
-            total_score = 0
-            max_score = 0
-            per_question_scores = []
-
-            questions = Question.objects.filter(assessment=assessment)
-
-            for q in questions:
-                max_score += QUESTIONS_MAX_SCORE
-
-                answer = Answer.objects.filter(
-                    user=user,
-                    question=q
-                ).first()
-
-                if not answer:
-                    per_question_scores.append({
-                        "question_id": q.id,
-                        "score": 0,
-                    })
+            if not question_id:
                     continue
 
-                # 🧠 AI SCORING STUB (replace later)
-                ai_score = 7  # 0–10
-                total_score += ai_score
+            # ❌ skip blank answers
+            if answer_text is None or not str(answer_text).strip():
+                continue
 
-                per_question_scores.append({
-                    "question_id": q.id,
-                    "score": ai_score,
-                })
 
-            # (Optional) save to Score model if you have one
-            # Score.objects.update_or_create(...)
+            question = Question.objects.filter(
+                id=question_id,
+                assessment=assessment
+            ).first()
 
-            results.append({
-                "user_id": user.id,
-                "total_score": total_score,
-                "max_score": max_score,
-                "questions": per_question_scores,
-            })
+            if not question:
+                continue
 
-        return ok(
-            "AI scoring completed",
-            results,
-            status_code=200,
+            Answer.objects.update_or_create(
+                user=request.user,
+                question=question,
+                defaults={"answer_text": answer_text},
+            )
+
+        
+        ua.status = "completed"
+        ua.submitted_at = submitted_at
+        ua.save(update_fields=["status", "submitted_at"])
+
+       
+        questions = list(
+            Question.objects.filter(assessment=assessment)
         )
 
+        answers_map = {
+            a.question_id: a.answer_text
+            for a in Answer.objects.filter(
+                user=request.user,
+                question__assessment=assessment
+            )
+            if a.answer_text and a.answer_text.strip()
+}
+
+
+        ai_scores = score_assessment_answers(
+        questions=[{"id": q.id, "text": q.text} for q in questions],
+        answers=answers_map,
+        role=assessment.role,
+    )
+
+        total_score = sum(ai_scores.values())
+        answered_questions_count = len(answers_map)
+        max_score = answered_questions_count * self.QUESTIONS_MAX_SCORE
+
+        Score.objects.update_or_create(
+            user=request.user,
+            assessment=assessment,
+            defaults={
+                "score": total_score,
+                "max_score": max_score,
+            },
+        )
+
+        return ok(
+            "Assessment submitted and scored",
+            {
+                "assessment_id": assessment.id,
+                "submitted_at": submitted_at,
+                "total_score": total_score,
+                "max_score": max_score,
+                "percentage": round(
+                    (total_score / max_score) * 100, 2
+                ) if max_score else 0,
+            },
+        )
 
 class MarkNotificationReadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -408,69 +484,18 @@ class MarkNotificationReadView(APIView):
         return ok("Notification marked as read")
 
 
-class AIScoreAssessmentView(APIView):
+class MyNotificationsView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, assessment_id):
-        if not has_permission(request.user, "assessment:score"):
-            return err("Forbidden", status_code=403)
-
-        assessment = get_object_or_404(Assessment, id=assessment_id)
-
-        completed_users = UserAssessment.objects.filter(
-            assessment=assessment,
-            status="completed"
-        ).select_related("user")
-
-        QUESTIONS_MAX_SCORE = 10  # per question
-
-        results = []
-
-        for ua in completed_users:
-            user = ua.user
-
-            total_score = 0
-            max_score = 0
-
-            questions = Question.objects.filter(assessment=assessment)
-
-            for q in questions:
-                max_score += QUESTIONS_MAX_SCORE
-
-                answer = Answer.objects.filter(
-                    user=user,
-                    question=q
-                ).first()
-
-                if not answer:
-                    continue  # score 0
-
-                # 🧠 AI SCORING STUB (replace later)
-                ai_score = 7  # 0–10
-                total_score += ai_score
-
-            # ✅ SAVE SCORE
-            Score.objects.update_or_create(
-                user=user,
-                assessment=assessment,
-                defaults={
-                    "total_score": total_score,
-                    "max_score": max_score,
-                },
-            )
-
-            results.append({
-                "user_id": user.id,
-                "total_score": total_score,
-                "max_score": max_score,
-            })
+    def get(self, request):
+        qs = AssesmentNotification.objects.filter(
+            user=request.user
+        ).order_by("-created_at")
 
         return ok(
-            "AI scoring completed",
-            results,
-            status_code=200,
+            "Notifications fetched",
+            NotificationSerializer(qs, many=True).data,
         )
-
 
 class MyAssessmentResultView(APIView):
     permission_classes = [IsAuthenticated]
@@ -505,6 +530,60 @@ class MyAssessmentResultView(APIView):
         )
 
 
+# class CreatorAssessmentHistoryView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         if not has_permission(request.user, "assessment:view"):
+#             return err("Forbidden", status_code=403)
+
+#         assessments = (
+#             Assessment.objects
+#             .filter(created_by=request.user)
+#             .annotate(
+#                 total_members=Count("userassessment", distinct=True),
+#                 completed_members=Count(
+#                     "userassessment",
+#                     filter=F("userassessment__status") == "completed",
+#                     distinct=True,
+#                 ),
+#             )
+#             .order_by("-created_at")
+#         )
+
+#         data = []
+
+#         for assessment in assessments:
+#             scores = Score.objects.filter(assessment=assessment)
+
+#             avg_percentage = 0
+#             if scores.exists():
+#                 avg_percentage = (
+#                     scores.aggregate(
+#                         avg=Avg(
+#                             ExpressionWrapper(
+#                                 F("total_score") * 100.0 / F("max_score"),
+#                                 output_field=FloatField(),
+#                             )
+#                         )
+#                     )["avg"]
+#                     or 0
+#                 )
+
+#             data.append({
+#                 "assessment_id": assessment.id,
+#                 "title": assessment.title,
+#                 "role": assessment.role,
+#                 "status": assessment.status,
+#                 "due_date": assessment.end_date.date(),
+#                 "completed_members": assessment.completed_members,
+#                 "total_members": assessment.total_members,
+#                 "average_score": round(avg_percentage),
+#             })
+
+#         return ok("Assessment history fetched", data)
+    
+from django.db.models import Count, Avg, F, Q, FloatField, ExpressionWrapper
 class CreatorAssessmentHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -512,52 +591,27 @@ class CreatorAssessmentHistoryView(APIView):
         if not has_permission(request.user, "assessment:view"):
             return err("Forbidden", status_code=403)
 
-        assessments = (
-            Assessment.objects
-            .filter(created_by=request.user)
-            .annotate(
+        qs = Assessment.objects.all()
+
+        # 🔒 Non-owner → only own assessments
+        if request.user.role != "owner":
+            qs = qs.filter(created_by=request.user)
+
+        qs = (
+            qs.annotate(
                 total_members=Count("userassessment", distinct=True),
                 completed_members=Count(
                     "userassessment",
-                    filter=F("userassessment__status") == "completed",
+                    filter=Q(userassessment__status="completed"),
                     distinct=True,
                 ),
             )
             .order_by("-created_at")
         )
 
-        data = []
+        serializer = CreatorAssessmentHistorySerializer(qs, many=True)
+        return ok("Assessment history fetched", serializer.data)
 
-        for assessment in assessments:
-            scores = Score.objects.filter(assessment=assessment)
-
-            avg_percentage = 0
-            if scores.exists():
-                avg_percentage = (
-                    scores.aggregate(
-                        avg=Avg(
-                            ExpressionWrapper(
-                                F("total_score") * 100.0 / F("max_score"),
-                                output_field=FloatField(),
-                            )
-                        )
-                    )["avg"]
-                    or 0
-                )
-
-            data.append({
-                "assessment_id": assessment.id,
-                "title": assessment.title,
-                "role": assessment.role,
-                "status": assessment.status,
-                "due_date": assessment.end_date.date(),
-                "completed_members": assessment.completed_members,
-                "total_members": assessment.total_members,
-                "average_score": round(avg_percentage),
-            })
-
-        return ok("Assessment history fetched", data)
-    
     
 class ReviewAssessmentResultView(APIView):
     permission_classes = [IsAuthenticated]
@@ -566,11 +620,17 @@ class ReviewAssessmentResultView(APIView):
         if not has_permission(request.user, "assessment:view"):
             return err("Forbidden", status_code=403)
 
-        assessment = get_object_or_404(
-            Assessment,
-            id=assessment_id,
-            created_by=request.user
-        )
+        if has_permission(request.user, "assessment:view_all"):
+                assessment = get_object_or_404(
+                Assessment,
+                id=assessment_id
+            )
+        else:
+            assessment = get_object_or_404(
+                Assessment,
+                id=assessment_id,
+                created_by=request.user
+            )
 
         
         total_members = UserAssessment.objects.filter(
@@ -662,11 +722,18 @@ class ViewUserAnswersView(APIView):
         if not has_permission(request.user, "assessment:view"):
             return err("Forbidden", status_code=403)
 
-        assessment = get_object_or_404(
-            Assessment,
-            id=assessment_id,
-            created_by=request.user
-        )
+        if has_permission(request.user, "assessment:view_all"):
+                assessment = get_object_or_404(
+                Assessment,
+                id=assessment_id
+            )
+        else:
+            assessment = get_object_or_404(
+                Assessment,
+                id=assessment_id,
+                created_by=request.user
+            )
+
 
         # ensure user was part of assessment
         ua = UserAssessment.objects.filter(

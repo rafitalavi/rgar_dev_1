@@ -14,7 +14,8 @@ from chat.views import (
 from permissions_app.views import ToggleUserPermissionView ,UserPermissionsView
 from chat.views_user_history import *
 from notifications.views import *
-from assessments.views import CreateAssessmentView , AssessmentQuestionsView , AddQuestionView ,DeleteQuestionView
+from assessments.views import (CreateAssessmentView , AssessmentQuestionsView , AddQuestionView ,DeleteQuestionView ,UpdateAssessmentEndDateView , UpdateAssessmentStatusView , MyAssessmentsView ,
+                               CandidateAssessmentQuestionsView ,SubmitAssessmentUnifiedView , CreatorAssessmentHistoryView ,ReviewAssessmentResultView ,ViewUserAnswersView) 
 
 urlpatterns = [
     path("login/", LoginView.as_view()),
@@ -82,10 +83,24 @@ urlpatterns = [
     
     
     
-    path("assesments/create", CreateAssessmentView.as_view()),
-    path("assessments/<int:assessment_id>/questions", AssessmentQuestionsView.as_view()),
-    path("assessments/<int:assessment_id>/questions-add", AddQuestionView.as_view()),
+    path("assesments/create/", CreateAssessmentView.as_view()),
+    path("assessments/<int:assessment_id>/questions/", AssessmentQuestionsView.as_view()),
+    path("assessments/<int:assessment_id>/questions-add/", AddQuestionView.as_view()),
     path("assessments/questions-del/<int:pk>/", DeleteQuestionView.as_view()),
+    path("assessments/<int:assessment_id>/end-date/", UpdateAssessmentEndDateView.as_view()),
+    path("assessments/<int:assessment_id>/status/", UpdateAssessmentStatusView.as_view()),
+    path("my-assessments/", MyAssessmentsView.as_view()),
+    path("assessments/<int:assessment_id>/questions/candidate", CandidateAssessmentQuestionsView.as_view()),
+    path("assessments/<int:assessment_id>/submit/", SubmitAssessmentUnifiedView.as_view()),
+    path("assessments/", CreatorAssessmentHistoryView.as_view()),
+    path("assessments/<int:assessment_id>/", ReviewAssessmentResultView.as_view()),
+    path("assessments/<int:assessment_id>/users/<int:user_id>/", ViewUserAnswersView.as_view()),
+    
+    
+    
+    
+    
+  
     
     
     

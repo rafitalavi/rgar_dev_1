@@ -736,7 +736,7 @@ class SendMessageView(APIView):
                     },
                     status=403
                 )
-                # 🚫 GROUP BLOCK CHECK
+                # GROUP BLOCK CHECK
         if room.room_type == "group":
             state = RoomUserState.objects.filter(
                 room=room,
@@ -808,9 +808,7 @@ class SendMessageView(APIView):
             )
 
 
-        # =========================
-        # REAL-TIME BROADCAST
-        # =========================
+      
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             f"room_{room.id}",

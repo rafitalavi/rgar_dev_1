@@ -429,6 +429,10 @@ class OwnerChangePasswordSerializer(serializers.Serializer):
         return attrs
 
 #status
-class UserStatusUpdateSerializer(serializers.Serializer):
-    is_active = serializers.BooleanField(required=False)
-    is_blocked = serializers.BooleanField(required=False)
+# class UserStatusUpdateSerializer(serializers.Serializer):
+#     is_active = serializers.BooleanField(required=False)
+#     is_blocked = serializers.BooleanField(required=False)
+class UserStatusUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["is_active", "is_blocked"]

@@ -1,5 +1,5 @@
 from .models import Assessment
-
+import random
 # def generate_questions_for_assessment(
 #     assessment: Assessment,
 #     count: int,
@@ -37,7 +37,22 @@ def generate_questions_for_assessment(assessment, count: int) -> list[str]:
         for i in range(1, count + 1)
     ]
 
+def score_assessment_answers(
+    *,
+    questions,
+    answers,
+    role,
+):
+    scores = {}
 
+    for q in questions:
+        q_id = q["id"]
+        if q_id in answers:
+            scores[q_id] = random.randint(5, 9)  # demo AI score
+        else:
+            scores[q_id] = 0
+
+    return scores
 
 # from ai_engine.kb_generator import EnhancedKnowledgeBasedAssessmentGenerator
 # from ai_engine.healthdesk import healthdesk_ai

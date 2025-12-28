@@ -41,6 +41,7 @@ PERMS = [
     ("assessment:create" , "Assesments Create"),
     ("assessment:view_all" , "Assesments Qeustionview"),
     ("assessment:update" , "Assesments update"),
+    ("assessment:view" , "Assesments Result"),
     
     
 ]
@@ -59,7 +60,7 @@ ROLE_MATRIX = {
         "notif:view","notif:mark_seen","chat:impersonate",
         "chat:view_all_history","chat:view_all_users",
         "assessment:create","assessment:view_all",
-        "assessment:update", 
+        "assessment:update", "assessment:view",
     ],
 
     "manager": [
